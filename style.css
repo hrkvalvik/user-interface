@@ -237,7 +237,6 @@ form button {
         width: 100%;
         justify-content: center;
     }
-<<<<<<< HEAD
 }
 
 .flex-container {
@@ -263,7 +262,4 @@ form button {
 .fx-price {
     background: green;;
     flex: 70px 0 1;
-=======
-
->>>>>>> 595ccb2 (update)
 }
