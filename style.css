@@ -208,6 +208,10 @@ form button {
         flex-wrap: nowrap;;
     }
 
+    .out-of-stock svg {
+        
+    }
+
 }
 
 @media (max-width: 325px) {
