@@ -13,6 +13,19 @@ body {
     overflow: hidden;
 }
 
+.out-of-stock {
+    font-size: .725rem;
+    color: white;
+    padding: 6px 8px;
+    background-color: #EF4444;
+    border-radius: 4px;
+    margin-bottom: .5rem; 
+    display: flex;
+    gap: .4rem;
+    justify-content: center;
+    align-items: center;
+}
+
 .cart > :not(:last-child) {
     border-bottom: 2px solid #f9f9f9;
 }
@@ -168,6 +181,11 @@ form button {
 
     .qty {
        margin: 0;
+       order: 0;
+    }
+
+    .pricing {
+        order: 3;
     }
 
     select#sub {
@@ -175,14 +193,21 @@ form button {
     }
 
 
-.product-image {
-    max-width: 100px; 
-}
+    .product-image {
+        max-width: 100px; 
+    }
 
-.product-image img {
-max-width: 100%;
-}
-    
+    .product-image img {
+        max-width: 100%;
+    }
+
+    .out-of-stock {
+        order: 1;
+        margin-left: 1rem;
+        word-break: normal;
+        flex-wrap: nowrap;;
+    }
+
 }
 
 @media (max-width: 325px) {
@@ -208,6 +233,7 @@ max-width: 100%;
         width: 100%;
         justify-content: center;
     }
+<<<<<<< HEAD
 }
 
 .flex-container {
@@ -233,4 +259,7 @@ max-width: 100%;
 .fx-price {
     background: green;;
     flex: 70px 0 1;
+=======
+
+>>>>>>> 595ccb2 (update)
 }
