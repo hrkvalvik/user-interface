@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Overtime Analyzer</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- dayjs for date/time manipulation -->
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/isBetween.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/customParseFormat.js"></script>
+    <!-- SheetJS/xlsx for file parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        /* Modern Gemini-Inspired Dark Mode Colors - Deep Slate Background with Emerald Accent */
+        :root {
+            --primary: 16 185 129;   /* Emerald 500 (Main Accent/CTA) */
+            --secondary: 96 165 250; /* Blue 400 (Secondary Accent/Export) */
+            --bg-dark: 7 15 25;      /* Deep Slate/Near Black */
+            --card-dark: 17 25 35;   /* Slightly lighter surface */
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: rgb(var(--bg-dark));
+            color: #e5e7eb; /* Light gray text */
+        }
+        .bento-card {
+            background-color: rgb(var(--card-dark));
+            border: 1px solid rgb(30 41 59); /* Slate 800 boundary */
+            border-radius: 1rem; 
+            box-shadow: 0 5px 15px -5px rgba(0, 0, 0, 0.5); /* Subtle lift */
+            transition: all 0.2s ease-in-out;
+        }
+        .bento-card:hover {
+            border-color: rgb(var(--primary) / 0.5);
+            box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.6);
+        }
+        /* Custom scrollbar for log table */
+        #logEntriesContainer {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #logEntriesContainer::-webkit-scrollbar {
+            width: 8px;
+        }
+        #logEntriesContainer::-webkit-scrollbar-thumb {
+            background-color: rgb(var(--primary) / 0.6);
+            border-radius: 4px;
+        }
+        .text-primary-color {
+            color: rgb(var(--primary));
+        }
+        .bg-primary-color {
+            background-color: rgb(var(--primary));
+        }
+        /* Style adjustments for modern dark mode inputs */
+        input[type="file"], input[type="text"], input[type="time"], select {
+            background-color: rgb(25 35 49); /* Slightly darker than card for contrast */
+            border-color: rgb(47 62 82); /* Slate 700 */
+            color: white;
+            transition: border-color 0.15s;
+        }
+        input[type="text"]:focus, input[type="time"]:focus, select:focus {
+            border-color: rgb(var(--primary));
+            box-shadow: 0 0 0 1px rgb(var(--primary));
+        }
+        /* Ensure table content wraps to accommodate long titles */
+        .log-table-details {
+            white-space: normal;
+        }
+    </style>
+    <script>
+        // --- Gemini API Constants ---
+        const API_KEY = ""; // Leave this empty for Canvas environment to provide the key.
+        const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
+        const MAX_RETRIES = 5;
+        const IS_API_KEY_PROVIDED = API_KEY && API_KEY.length > 0;
+
+        // Define state object for easier management
+        let state = {
+            appBaseName: 'Overtime Analyzer', 
+            fileTitle: null, 
+            allRows: [], 
+            rawData: [], 
+            filteredData: [],
+            summary: {
+                totalMinutes: 0,
+                totalHours: 0,
+                uniqueLogs: 0,
+            },
+            headers: [], 
+            columnMap: { 
+                date: '', 
+                time: '',
+                details: '',
+                duration: ''
+            },
+            filters: {
+                excludeStart: '00:00', 
+                excludeEnd: '00:00',
+                includeWeekends: false,
+                excludeKeywords: '' 
+            },
+            tempExcludeKeywords: '', 
+            isLoading: false,
+            error: null,
+            // LLM State
+            aiSummary: null,
+            aiReport: null,
+            aiLoading: false,
+            aiError: !IS_API_KEY_PROVIDED ? "Gemini API key is required for LLM features. Please provide a key if you're not in a supported environment." : null
+        };
+
+        // --- Utility Functions ---
+
+        function formatDuration(minutes) {
+            if (typeof minutes !== 'number' || isNaN(minutes)) return '0 minutes';
+            const hours = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            let parts = [];
+            if (hours > 0) parts.push(`${hours}h`);
+            if (mins > 0 || hours === 0) parts.push(`${mins}m`);
+            return parts.join(' ');
+        }
+
+        function formatDateTime(dateTime) {
+            return dayjs(dateTime).format('ddd, D/MMM HH:mm');
+        }
+        
+        // Formats date to show just the day name (e.g., Mon, Tue)
+        function formatDayName(dateTime) {
+            return dayjs(dateTime).format('ddd');
+        }
+
+        function parseFromField(dateString) {
+            const formats = [
+                'M/D/YYYY H:mm', 'M/D/YYYY HH:mm', 
+                'D/M/YYYY H:mm', 'D/M/YYYY HH:mm', 
+                'M.D.YYYY H:mm', 'YYYY-MM-DD HH:mm',
+                'YYYY-M-D H:mm', 'YYYY-M-D HH:mm'
+            ];
+            return dayjs(dateString, formats, true);
+        }
+        
+        function guessColumn(headers, keywords) {
+            for (const keyword of keywords) {
+                const match = headers.find(h => typeof h === 'string' && h.toLowerCase().includes(keyword));
+                if (match) return match;
+            }
+            return '';
+        }
+
+        function calculateSummary() {
+            const totalMinutes = state.filteredData.reduce((sum, entry) => sum + entry.duration, 0);
+            const uniqueTitles = new Set(state.filteredData.map(entry => entry.title));
+
+            state.summary = {
+                totalMinutes: totalMinutes,
+                totalHours: totalMinutes / 60,
+                uniqueLogs: uniqueTitles.size,
+                logCount: state.filteredData.length
+            };
+        }
+        
+        // --- LLM API Functions ---
+
+        async function callGeminiApi(payload, useSearchGrounding = false, systemInstruction = null) {
+            // Check if API key is expected to be present
+            if (!IS_API_KEY_PROVIDED) {
+                throw new Error("API Key required. Gemini features are disabled until an API Key is available.");
+            }
+            
+            // Helper to call the Gemini API with backoff
+            
+            // Construct the payload dynamically
+            const finalPayload = {
+                contents: payload.contents,
+                generationConfig: payload.generationConfig || {},
+                tools: useSearchGrounding ? [{ "google_search": {} }] : [],
+                systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+            };
+            
+            for (let i = 0; i < MAX_RETRIES; i++) {
+                try {
+                    const response = await fetch(`${API_URL}?key=${API_KEY}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(finalPayload)
+                    });
+
+                    if (response.status === 429 && i < MAX_RETRIES - 1) {
+                        await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                        continue;
+                    }
+
+                    if (!response.ok) {
+                        // Specifically check for 401 which points to key issues
+                        const errorText = response.status === 401 
+                            ? "API Key is invalid or unauthorized (Status 401). Please check your key." 
+                            : `Gemini API request failed with status: ${response.status}`;
+                        throw new Error(errorText);
+                    }
+
+                    const result = await response.json();
+                    const candidate = result.candidates?.[0];
+
+                    if (candidate && candidate.content?.parts?.[0]?.text) {
+                        const text = candidate.content.parts[0].text;
+                        let sources = [];
+                        const groundingMetadata = candidate.groundingMetadata;
+                        if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                            sources = groundingMetadata.groundingAttributions
+                                .map(attribution => ({
+                                    uri: attribution.web?.uri,
+                                    title: attribution.web?.title,
+                                }))
+                                .filter(source => source.uri && source.title);
+                        }
+                        return { text, sources };
+                    } else {
+                        throw new Error("Gemini API returned an invalid response structure or blocked content.");
+                    }
+                } catch (error) {
+                    console.error("Gemini API attempt failed:", error);
+                    if (i === MAX_RETRIES - 1) {
+                        throw error;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                }
+            }
+        }
+        
+        async function handleSummarizeActivities() {
+            if (state.filteredData.length === 0 || !isMappingComplete) {
+                state.aiError = "Filter and analyze data (Step 3) first before generating AI insights.";
+                renderUI();
+                return;
+            }
+            if (!IS_API_KEY_PROVIDED) {
+                state.aiError = "API Key is missing. Cannot call Gemini API.";
+                renderUI();
+                return;
+            }
+
+
+            state.aiLoading = true;
+            state.aiSummary = null;
+            state.aiReport = null;
+            state.aiError = null;
+            renderUI();
+
+            try {
+                // Limit the data sent to the LLM to prevent hitting token limits
+                const dataForPrompt = state.filteredData.slice(0, 500).map(entry => 
+                    `[${formatDayName(entry.from)} ${dayjs(entry.from).format('HH:mm')}] ${entry.title}: ${entry.duration.toFixed(0)} min`
+                ).join('\n');
+
+                const systemPrompt = `You are a professional workflow analyst. Your task is to review a raw log of time entries. 
+                Categorize the entries into 3-5 distinct, high-level activity categories (e.g., 'Internal Meetings', 'Development/Coding', 'Documentation', 'Administrative'). 
+                For each category, provide the total duration and list the top 3 most common titles/programs within it. 
+                Start your response with 'Analysis Summary:' and use bullet points for the categories.`;
+                
+                const userQuery = `Analyze the following time log data and categorize the activities:\n\n---\n${dataForPrompt}`;
+                
+                const payload = {
+                    contents: [{ parts: [{ text: userQuery }] }],
+                };
+
+                // Use search grounding to help categorize unfamiliar titles/programs
+                const result = await callGeminiApi(payload, true, systemPrompt); 
+
+                state.aiSummary = result;
+                state.aiError = null; 
+
+            } catch (e) {
+                state.aiError = `AI Summarization failed: ${e.message}. If the key is provided and the error persists, the key may be invalid or unauthorized.`;
+            } finally {
+                state.aiLoading = false;
+                renderUI();
+            }
+        }
+
+        async function handleDraftReport() {
+            if (state.filteredData.length === 0 || !isMappingComplete) {
+                state.aiError = "Filter and analyze data (Step 3) first before generating AI insights.";
+                renderUI();
+                return;
+            }
+            if (!IS_API_KEY_PROVIDED) {
+                state.aiError = "API Key is missing. Cannot call Gemini API.";
+                renderUI();
+                return;
+            }
+
+
+            state.aiLoading = true;
+            state.aiReport = null;
+            state.aiError = null;
+            renderUI();
+
+            try {
+                // Use the structured summary if available, otherwise use raw data
+                const rawSummary = state.aiSummary?.text || 'No previous summary available. Summarize the following raw log entries.';
+                
+                // Limit the data sent to the LLM to prevent hitting token limits
+                const dataForPrompt = state.filteredData.slice(0, 500).map(entry => 
+                    `[${formatDayName(entry.from)} ${dayjs(entry.from).format('HH:mm')}] ${entry.title}: ${entry.duration.toFixed(0)} min`
+                ).join('\n');
+
+                const totalMinutes = state.summary.totalMinutes;
+                const totalDurationFormatted = formatDuration(totalMinutes);
+                
+                const systemPrompt = `You are a manager drafting a progress report to justify ${totalDurationFormatted} of overtime based on the provided activity log. Write a concise, professional paragraph focusing on outcomes and necessity. Mention key high-level activities.`;
+                
+                const userQuery = `Generate a report draft based on the filtered data, which spans ${state.filteredData.length} entries totaling ${totalDurationFormatted}. Use the following activities for context:\n\n---\n${rawSummary}\n\n---\nRaw entries:\n${dataForPrompt}`;
+                
+                const payload = {
+                    contents: [{ parts: [{ text: userQuery }] }],
+                };
+
+                const result = await callGeminiApi(payload, false, systemPrompt); // Standard text generation
+
+                state.aiReport = result;
+                state.aiError = null; 
+
+            } catch (e) {
+                state.aiError = `AI Report drafting failed: ${e.message}. If the key is provided and the error persists, the key may be invalid or unauthorized.`;
+            } finally {
+                state.aiLoading = false;
+                renderUI();
+            }
+        }
+
+        // --- Data Processing ---
+
+        function parseRawData(rows, columnMap) {
+            const parsed = [];
+            const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
+
+            if (!dateKey || !timeKey || !detailsKey || !durationKey) {
+                return [];
+            }
+            
+            for (const row of rows) {
+                const dateRaw = row[dateKey];
+                const timeRaw = row[timeKey];
+                const detailsRaw = row[detailsKey];
+                const durationRaw = row[durationKey];
+
+                if (!dateRaw || !timeRaw || !durationRaw) {
+                    continue;
+                }
+
+                const fromRaw = `${dateRaw} ${timeRaw}`; 
+                const fromDate = parseFromField(fromRaw);
+                let durationValue = durationRaw; 
+
+                if (typeof durationRaw === 'string') {
+                    durationValue = parseFloat(durationRaw.replace(',', '.'));
+                } else if (typeof durationRaw !== 'number') {
+                    durationValue = NaN;
+                }
+
+                if (fromDate.isValid() && !isNaN(durationValue) && durationValue > 0) {
+                    
+                    let title = String(detailsRaw || '').trim(); 
+                    if (title.length === 0) {
+                         title = 'No Details Provided';
+                    }
+
+                    parsed.push({
+                        from: fromDate.toDate(),
+                        title: title, 
+                        duration: durationValue, 
+                        rawFrom: fromRaw, 
+                    });
+                } else {
+                    console.warn(`Skipping row due to invalid date/time/duration: Date="${dateRaw}", Time="${timeRaw}", Duration="${durationRaw}"`);
+                }
+            }
+            return parsed;
+        }
+
+        function applyFilters() {
+            const { allRows, columnMap, filters } = state;
+
+            const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
+            const isMappingComplete = dateKey && timeKey && detailsKey && durationKey;
+            
+            if (!isMappingComplete || allRows.length === 0) {
+                state.rawData = [];
+                state.filteredData = [];
+                calculateSummary(); 
+                renderUI();
+                return;
+            }
+
+            const parsedData = parseRawData(allRows, columnMap);
+            state.rawData = parsedData; 
+
+            const startStr = filters.excludeStart;
+            const endStr = filters.excludeEnd;
+            const includeWeekends = filters.includeWeekends;
+            const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+            const filtersActive = timeRegex.test(startStr) && timeRegex.test(endStr);
+            
+            const [startHour, startMinute] = startStr.split(':').map(Number);
+            const startMinutes = (startHour || 0) * 60 + (startMinute || 0);
+            
+            const [endHour, endMinute] = endStr.split(':').map(Number);
+            const endMinutes = (endHour || 0) * 60 + (endMinute || 0);
+
+            const keywordsToExclude = filters.excludeKeywords
+                .split(',')
+                .map(k => String(k).trim().toLowerCase())
+                .filter(k => k.length > 0);
+
+
+            const filtered = parsedData.filter(entry => {
+                const entryTime = dayjs(entry.from);
+                
+                // 3a. Keyword Exclusion Check
+                const entryTitle = entry.title.toLowerCase();
+                const isExcludedByKeyword = keywordsToExclude.some(keyword => entryTitle.includes(keyword));
+
+                if (isExcludedByKeyword) {
+                    return false; 
+                }
+
+                // 3b. Weekend Override Check
+                const isWeekend = entryTime.day() === 0 || entryTime.day() === 6;
+
+                if (includeWeekends && isWeekend) {
+                    return true; 
+                }
+                
+                if (!filtersActive) return true;
+
+                // 3c. Time-of-Day Exclusion Logic
+                
+                const entryMinutes = entryTime.hour() * 60 + entryTime.minute();
+
+                let isExcludedByTime = false;
+
+                if (startMinutes <= endMinutes) {
+                    // Normal range (e.g., 09:00 to 17:00)
+                    isExcludedByTime = entryMinutes >= startMinutes && entryMinutes <= endMinutes;
+                } else {
+                    // Range spans midnight (e.g., 23:00 to 06:00)
+                    isExcludedByTime = entryMinutes >= startMinutes || entryMinutes <= endMinutes;
+                }
+
+                if (isExcludedByTime) {
+                    return false; 
+                }
+
+                return true; 
+            });
+
+            state.filteredData = filtered;
+            calculateSummary();
+            // Clear AI results if filters change
+            state.aiSummary = null;
+            state.aiReport = null;
+            renderUI();
+        }
+
+
+        // --- File Handling Helpers ---
+        function handleFileError(e) {
+            console.error("File processing error:", e);
+            state.error = `Error processing file: ${e.message}. Please check if the file is valid and headers are readable.`;
+            state.rawData = [];
+            state.allRows = [];
+            state.headers = [];
+            state.isLoading = false;
+            renderUI();
+        }
+
+        function processWorkbook(workbook, file) {
+            try {
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+
+                const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                if (jsonRows.length < 1) {
+                    throw new Error("File is empty or could not be parsed.");
+                }
+
+                const headers = jsonRows[0].filter(h => h); 
+                state.headers = headers;
+
+                state.allRows = jsonRows.slice(1).map(row => {
+                    const obj = {};
+                    headers.forEach((header, i) => {
+                        obj[header] = row[i];
+                    });
+                    return obj;
+                });
+
+                state.columnMap = {
+                    date: guessColumn(headers, ['date', 'dato']),
+                    time: guessColumn(headers, ['time', 'tid']),
+                    details: guessColumn(headers, ['details', 'tittel', 'program']),
+                    duration: guessColumn(headers, ['duration', 'varighet', 'minutter']),
+                };
+                
+                state.filters.excludeStart = '00:00';
+                state.filters.excludeEnd = '00:00';
+                state.filters.excludeKeywords = ''; 
+                state.tempExcludeKeywords = ''; 
+
+                applyFilters();
+
+            } catch (e) {
+                handleFileError(e);
+            } finally {
+                state.isLoading = false;
+                renderUI();
+            }
+        }
+
+        async function handleFileUpload(event) {
+            state.isLoading = true;
+            state.error = null;
+            state.headers = [];
+            state.rawData = [];
+            state.allRows = []; 
+            
+            const file = event.target.files[0];
+            if (!file) {
+                state.isLoading = false;
+                renderUI();
+                return;
+            }
+
+            const fileName = file.name;
+            state.fileTitle = fileName.substring(0, fileName.lastIndexOf('.')) || fileName;
+            
+            // Clear AI results on new file load
+            state.aiSummary = null;
+            state.aiReport = null;
+
+            renderUI(); 
+
+            try {
+                let workbook;
+                const isCSV = file.name.toLowerCase().endsWith('.csv');
+
+                if (isCSV) {
+                    const textData = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => resolve(e.target.result);
+                        reader.onerror = (e) => reject(new Error("Failed to read CSV file."));
+                        reader.readAsText(file, 'UTF-8');
+                    });
+                    workbook = XLSX.read(textData, { type: 'string' });
+
+                } else {
+                    const arrayBufferData = await file.arrayBuffer();
+                    workbook = XLSX.read(arrayBufferData, { type: 'array' });
+                }
+                
+                processWorkbook(workbook, file);
+
+            } catch (e) {
+                handleFileError(e);
+            }
+        }
+
+
+        // --- Keyword Filter Logic (FIXED to maintain input focus) ---
+        function handleTempKeywordChange(event) {
+            state.tempExcludeKeywords = event.target.value;
+        }
+
+        function handleApplyKeywordFilter() {
+            state.filters.excludeKeywords = state.tempExcludeKeywords;
+            applyFilters(); 
+        }
+        // --- End Keyword Filter Logic ---
+
+
+        // --- Event Handlers (Time and Checkbox) ---
+
+        function handleColumnMapChange(event) {
+            const { name, value } = event.target;
+            state.columnMap[name] = value;
+            applyFilters();
+        }
+
+        function handleFilterChange(event) {
+            const { name, value, type, checked } = event.target;
+
+            if (type === 'checkbox') {
+                state.filters[name] = checked;
+            } else {
+                state.filters[name] = value;
+            }
+
+            applyFilters();
+        }
+
+        function exportCSV() {
+            if (state.filteredData.length === 0) {
+                state.error = "No data to export. Please load a file and apply filters.";
+                renderUI();
+                return;
+            }
+            state.error = null;
+
+            // Updated headers for export
+            const headers = ["From (Formatted)", "Day", "Raw From", "Details (Raw Title)", "Duration (Minutes)"];
+            const csvRows = [headers.join(',')];
+
+            for (const entry of state.filteredData) {
+                const fromStr = dayjs(entry.from).format('YYYY-MM-DD HH:mm:ss');
+                const dayStr = formatDayName(entry.from); // Get day name
+                const row = [
+                    `"${fromStr}"`,
+                    `"${dayStr}"`, // Include day name
+                    `"${entry.rawFrom.replace(/"/g, '""')}"`, 
+                    `"${entry.title.replace(/"/g, '""')}"`, 
+                    entry.duration
+                ].join(',');
+                csvRows.push(row);
+            }
+
+            const BOM = "\uFEFF";
+            const csvString = BOM + csvRows.join('\n');
+            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `filtered_${state.fileTitle || state.appBaseName}.csv`; 
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            alert("Export complete! You can open this CSV file directly in Google Sheets by choosing 'File' > 'Import' from within Google Sheets.");
+        }
+
+        // --- UI Rendering ---
+
+        function renderUI() {
+            const root = document.getElementById('app-root');
+
+            const isReadyToAnalyze = state.rawData.length > 0;
+            const isMappingVisible = state.headers.length > 0;
+            const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+
+            if (state.filters.excludeKeywords !== state.tempExcludeKeywords) {
+                state.tempExcludeKeywords = state.filters.excludeKeywords;
+            }
+
+            // Check if API key is explicitly missing for the dedicated warning
+            const isApiKeyMissing = !IS_API_KEY_PROVIDED;
+
+            root.innerHTML = `
+                <div class="max-w-7xl mx-auto p-4 sm:p-8 lg:p-12">
+                    <h1 class="text-4xl font-extrabold text-gray-100 mb-8 tracking-tight">
+                        <span class="text-primary-color">${state.appBaseName}</span>
+                        ${state.fileTitle ? `<span class="text-xl font-semibold text-gray-400 block sm:inline mt-2 sm:mt-0"> — File: ${state.fileTitle}</span>` : ''}
+                    </h1>
+
+                    <!-- 1. File Upload & Error Display -->
+                    <div class="bento-card p-6 mb-8">
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-200 border-b border-slate-700/50 pb-3">1. Upload File</h2>
+                        <input type="file" id="fileInput"
+                               class="block w-full text-sm text-gray-300 border rounded-lg cursor-pointer transition duration-150 p-3
+                                     bg-slate-900 border-slate-700 hover:border-primary-color/50"
+                               accept=".csv, .xlsx">
+                        ${state.isLoading ? `
+                            <p class="mt-4 text-center text-primary-color font-medium">Loading and analyzing data...</p>
+                        ` : ''}
+                        ${state.error ? `
+                            <div class="mt-4 p-4 bg-red-900/50 border border-red-700 text-red-300 rounded-xl" role="alert">
+                                <p class="font-bold">Error</p>
+                                <p>${state.error}</p>
+                                <p class="text-sm">Try uploading the file again. A special character set (UTF-8) fix is implemented for CSV files.</p>
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <!-- 1.b Column Mapping Section -->
+                    ${isMappingVisible ? `
+                        <div class="bento-card p-6 mb-8 border-yellow-700 bg-slate-800">
+                            <h2 class="text-2xl font-semibold mb-4 text-yellow-300 border-b border-yellow-700/50 pb-3">1.b Column Mapping</h2>
+                            <p class="text-sm text-gray-300 mb-6">Please confirm which columns contain the necessary information from your file.</p>
+                            
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                                ${['date', 'time', 'details', 'duration'].map(key => `
+                                    <div>
+                                        <label for="map-${key}" class="block text-sm font-medium text-gray-300 capitalize mb-1">
+                                            ${key === 'date' ? 'Date' : key === 'time' ? 'Time' : key === 'details' ? 'Details' : 'Duration (Min.)'}
+                                        </label>
+                                        <select id="map-${key}" name="${key}"
+                                                onchange="handleColumnMapChange(event)"
+                                                class="w-full rounded-lg shadow-inner p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white focus:border-primary-color focus:ring-primary-color">
+                                            <option value="" ${!state.columnMap[key] ? 'selected' : ''} disabled>Select Column...</option>
+                                            ${state.headers.map(header => `
+                                                <option value="${header}" ${state.columnMap[key] === header ? 'selected' : ''}>
+                                                    ${header}
+                                                </option>
+                                            `).join('')}
+                                        </select>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            ${!isMappingComplete ? `
+                                <p class="mt-6 p-3 bg-yellow-900/50 text-yellow-300 rounded-xl font-medium text-sm">All four columns must be selected to start the analysis.</p>
+                            ` : ''}
+                        </div>
+                    ` : ''}
+
+                    <!-- Conditional Analysis Sections (2 & 3 & 4) -->
+                    ${isReadyToAnalyze ? `
+                        <!-- 2. Summary & Controls Grid - ORDER SWAPPED -->
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+                            
+                            <!-- Filter Controls (MOVED TO LEFT) -->
+                            <div class="lg:col-span-2 bento-card p-6">
+                                <h2 class="text-2xl font-semibold mb-4 text-gray-200 border-b border-slate-700/50 pb-3">
+                                    2. Filtering
+                                </h2>
+                                
+                                <div class="mb-6 border-b pb-6 border-slate-700">
+                                    <h3 class="text-xl font-medium text-gray-100 mb-3">Time Exclusion (Daily)</h3>
+                                    <p class="text-sm text-gray-400 mb-4">Excludes log entries where the time of day falls within the period below.</p>
+
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                                        <div>
+                                            <label for="excludeStart" class="block text-sm font-medium text-gray-300 mb-1">Exclude From Time - HH:MM</label>
+                                            <input type="time" id="excludeStart" name="excludeStart"
+                                                   value="${state.filters.excludeStart}"
+                                                   onchange="handleFilterChange(event)"
+                                                   class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                        </div>
+                                        <div>
+                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-300 mb-1">Exclude To Time - HH:MM</label>
+                                            <input type="time" id="excludeEnd" name="excludeEnd"
+                                                   value="${state.filters.excludeEnd}"
+                                                   onchange="handleFilterChange(event)"
+                                                   class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center p-3 rounded-lg bg-slate-700/50">
+                                        <input id="includeWeekends" name="includeWeekends" type="checkbox"
+                                               ${state.filters.includeWeekends ? 'checked' : ''}
+                                               onchange="handleFilterChange(event)"
+                                               class="h-5 w-5 text-primary-color border-slate-500 rounded focus:ring-primary-color bg-slate-700">
+                                        <label for="includeWeekends" class="ml-3 block text-base font-medium text-gray-200">
+                                            Include Weekends (Sat/Sun) <span class="text-sm text-gray-400">(Overrides time filter)</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <!-- Keyword Exclusion -->
+                                <div>
+                                    <h3 class="text-xl font-medium text-gray-100 mb-3">Keyword Exclusion (Details)</h3>
+                                    <p class="text-sm text-gray-400 mb-4">Exclude rows where the 'Details' field contains these words/frases. Separate with commas.</p>
+                                    
+                                    <div class="flex space-x-3 mt-1">
+                                        <input type="text" id="excludeKeywords" 
+                                               placeholder="E.g.: Slack, Google Meet, Lunch"
+                                               value="${state.tempExcludeKeywords}"
+                                               oninput="handleTempKeywordChange(event)"
+                                               class="block w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                        <button onclick="handleApplyKeywordFilter()"
+                                                class="px-6 py-3 bg-primary-color text-slate-900 font-bold rounded-lg shadow-lg hover:bg-emerald-600 transition duration-150 whitespace-nowrap">
+                                            Apply Filter
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Summary (MOVED TO RIGHT) -->
+                            <div class="lg:col-span-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-6">
+                                <div class="bento-card p-6 bg-primary-color text-slate-900 shadow-xl">
+                                    <h3 class="text-lg font-semibold mb-1 opacity-90 tracking-wide">TOTAL DURATION (FILTERED)</h3>
+                                    <p class="text-5xl font-extrabold tracking-tight">${formatDuration(state.summary.totalMinutes)}</p>
+                                    <p class="text-sm opacity-80 mt-1">${state.summary.totalMinutes.toFixed(0)} minutes total</p>
+                                </div>
+                                <div class="bento-card p-6 border border-slate-700">
+                                    <h3 class="text-lg font-semibold mb-1 text-primary-color tracking-wide">LOG ENTRIES</h3>
+                                    <p class="text-5xl font-extrabold text-secondary tracking-tight">${state.summary.logCount}</p>
+                                    <p class="text-sm text-gray-400 mt-1">Filtered Rows / Total: ${state.rawData.length}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 4. LLM Insights -->
+                        <div class="bento-card p-6 mb-8">
+                            <h2 class="text-2xl font-semibold mb-4 text-gray-200 border-b border-slate-700/50 pb-3">4. LLM Insights ✨</h2>
+                            <p class="text-sm text-gray-400 mb-4">Use Gemini to analyze the filtered data above and generate summaries or reports.</p>
+
+                            ${isApiKeyMissing ? `
+                                <div class="p-4 bg-yellow-900/50 border border-yellow-700 text-yellow-300 rounded-xl mb-4">
+                                    <p class="font-bold">API Key Required</p>
+                                    <p>Gemini features are currently disabled (Error 401) because the API key is missing. Please ensure your environment provides a valid key.</p>
+                                </div>
+                            ` : ''}
+
+                            <div class="space-y-4">
+                                <div class="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
+                                    <button onclick="handleSummarizeActivities()"
+                                            class="flex-1 px-4 py-3 bg-indigo-500 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-600 transition duration-150 disabled:opacity-50"
+                                            ${!isReadyToAnalyze || state.aiLoading || isApiKeyMissing ? 'disabled' : ''}>
+                                        ✨ Summarize Activities & Categorize
+                                    </button>
+                                    <button onclick="handleDraftReport()"
+                                            class="flex-1 px-4 py-3 bg-indigo-500 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-600 transition duration-150 disabled:opacity-50"
+                                            ${!isReadyToAnalyze || state.aiLoading || isApiKeyMissing ? 'disabled' : ''}>
+                                        ✨ Draft Justification Report
+                                    </button>
+                                </div>
+                                
+                                <div id="ai-insights" class="min-h-[50px] mt-4">
+                                    ${state.aiLoading ? `
+                                        <div class="text-center p-4">
+                                            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-color inline-block"></div>
+                                            <p class="mt-2 text-primary-color">Analyzing data with Gemini...</p>
+                                        </div>
+                                    ` : state.aiError ? `
+                                        <div class="p-4 bg-red-900/50 border border-red-700 text-red-300 rounded-xl">
+                                            <p class="font-bold">AI Error</p>
+                                            <p>${state.aiError}</p>
+                                            ${state.aiError.includes('401') ? `<p class="text-sm mt-2">The 401 status indicates an **Authentication Failure**. Please ensure the Gemini API key is correct and authorized for use.</p>` : ''}
+                                        </div>
+                                    ` : (state.aiSummary || state.aiReport) ? `
+                                        ${state.aiSummary ? `
+                                            <div class="p-4 bg-slate-700/50 rounded-lg mb-4">
+                                                <h3 class="text-lg font-semibold text-primary-color mb-2">Activity Summary:</h3>
+                                                <div class="text-gray-300 whitespace-pre-wrap">${state.aiSummary.text}</div>
+                                                ${state.aiSummary.sources.length > 0 ? `
+                                                    <p class="mt-3 text-xs text-gray-400 font-medium">Sources (used for context):</p>
+                                                    <ul class="list-disc list-inside text-xs text-gray-400 ml-4">
+                                                        ${state.aiSummary.sources.map(s => `<li><a href="${s.uri}" target="_blank" class="hover:underline text-indigo-400">${s.title}</a></li>`).join('')}
+                                                    </ul>
+                                                ` : ''}
+                                            </div>
+                                        ` : ''}
+                                        ${state.aiReport ? `
+                                            <div class="p-4 bg-slate-700/50 rounded-lg">
+                                                <h3 class="text-lg font-semibold text-primary-color mb-2">Justification Report Draft:</h3>
+                                                <p class="text-gray-300 whitespace-pre-wrap">${state.aiReport.text}</p>
+                                            </div>
+                                        ` : ''}
+                                    ` : `
+                                        <p class="text-center text-gray-500 p-4">Generate insights to see results here.</p>
+                                    `}
+                                </div>
+                            </div>
+                        </div>
+
+
+                        <!-- 3. Filtered Results Table -->
+                        <div class="bento-card p-6 mb-8">
+                            <div class="flex justify-between items-center mb-6 border-b border-slate-700/50 pb-3">
+                                <h2 class="text-2xl font-semibold text-gray-200">3. Filtered Results</h2>
+                                <button onclick="exportCSV()"
+                                        class="px-6 py-3 border border-[rgb(96,165,250)] bg-transparent text-gray-100 font-bold rounded-lg shadow-md hover:bg-[rgb(96,165,250)] hover:text-slate-900 transition duration-150 disabled:opacity-50"
+                                        ${state.filteredData.length === 0 ? 'disabled' : ''}>
+                                    Export CSV
+                                </button>
+                            </div>
+                            
+                            <div id="logEntriesContainer" class="w-full">
+                                <table class="min-w-full divide-y divide-slate-700">
+                                    <thead class="bg-slate-700 sticky top-0 shadow-lg">
+                                        <tr>
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/12">Day</th> <!-- NEW DAY HEADER -->
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/6">From (Formatted)</th>
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/6">Raw From</th>
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/2">Title / Details (Raw Data)</th>
+                                            <th class="px-4 py-4 text-right text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/12">Duration (m)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-700 text-sm bg-slate-800">
+                                        ${state.filteredData.length > 0 ? state.filteredData.map(entry => `
+                                            <tr class="${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'bg-green-900/10' : 'hover:bg-slate-700/50'} transition duration-100">
+                                                <td class="px-4 py-3 whitespace-nowrap font-medium text-primary-color">${formatDayName(entry.from)}</td> <!-- NEW DAY CELL -->
+                                                <td class="px-4 py-3 whitespace-nowrap font-medium text-gray-200">${formatDateTime(entry.from)}</td>
+                                                <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-400 font-mono">${entry.rawFrom}</td>
+                                                <td class="px-4 py-3 text-gray-300 log-table-details">${entry.title}</td>
+                                                <td class="px-4 py-3 whitespace-nowrap text-right font-mono text-gray-300">${entry.duration.toFixed(0)}</td>
+                                            </tr>
+                                        `).join('') : `
+                                            <tr>
+                                                <td colspan="5" class="px-6 py-4 text-center text-gray-500 italic">
+                                                    No log entries match the current filter settings.
+                                                </td>
+                                            </tr>
+                                        `}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    ` : isMappingVisible ? `
+                        <!-- Mapping is visible but incomplete -->
+                        <div class="bento-card p-8 mb-8 text-center text-gray-400">
+                             <p class="text-xl font-medium">Complete the column mapping above to see analysis results.</p>
+                        </div>
+                    ` : `
+                        <!-- Placeholder when no data is loaded -->
+                         <div class="bento-card p-8 mb-8 text-center text-gray-400">
+                             <p class="text-xl font-medium">Upload a file to start the analysis.</p>
+                        </div>
+                    `}
+                </div>
+            `;
+
+            // Re-attach event listeners
+            document.getElementById('fileInput')?.addEventListener('change', handleFileUpload);
+            document.getElementById('map-date')?.addEventListener('change', handleColumnMapChange);
+            document.getElementById('map-time')?.addEventListener('change', handleColumnMapChange);
+            document.getElementById('map-details')?.addEventListener('change', handleColumnMapChange);
+            document.getElementById('map-duration')?.addEventListener('change', handleColumnMapChange);
+            
+            document.getElementById('excludeStart')?.addEventListener('change', handleFilterChange);
+            document.getElementById('excludeEnd')?.addEventListener('change', handleFilterChange);
+            document.getElementById('includeWeekends')?.addEventListener('change', handleFilterChange);
+        }
+
+        // Initialize the application when the window loads
+        window.onload = () => {
+            renderUI();
+        };
+
+        // Polyfill/Shim for older browser alert replacement (important for compatibility)
+        function alert(message) {
+            const container = document.getElementById('app-root');
+            let modal = document.getElementById('customAlert');
+
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'customAlert';
+                modal.className = 'fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 transition-opacity duration-300';
+                modal.innerHTML = `
+                    <div class="bg-slate-800 rounded-xl shadow-2xl p-6 max-w-sm w-full transform transition-all duration-300 scale-95 opacity-0 border border-slate-700">
+                        <h3 class="text-xl font-bold mb-3 text-primary-color">Success</h3>
+                        <p id="alertMessage" class="mb-4 text-gray-300"></p>
+                        <button onclick="document.getElementById('customAlert').classList.add('opacity-0', 'scale-95'); setTimeout(() => document.getElementById('customAlert').style.display = 'none', 300);"
+                                class="w-full px-4 py-2 bg-primary-color text-slate-900 font-bold rounded-lg hover:bg-emerald-600 transition duration-150">
+                            OK
+                        </button>
+                    </div>
+                `;
+                container.appendChild(modal);
+            }
+
+            document.getElementById('alertMessage').textContent = message;
+            modal.style.display = 'flex';
+            // Trigger transition
+            setTimeout(() => modal.classList.remove('opacity-0', 'scale-95'), 10);
+        }
+
+    </script>
+</head>
+<body id="app-root">
+    <!-- The JavaScript will render the full UI here -->
+</body>
+</html>
