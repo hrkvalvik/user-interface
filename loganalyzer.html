@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Log Analyzer</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Configure Tailwind for Inter font -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: '#10B981', // Emerald Green
+                        secondary: '#FBBF24', // Amber
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar for log area */
+        .log-scroll::-webkit-scrollbar { width: 8px; }
+        .log-scroll::-webkit-scrollbar-thumb {
+            background-color: #D1D5DB;
+            border-radius: 4px;
+        }
+        .log-scroll::-webkit-scrollbar-track {
+            background-color: #F3F4F6;
+        }
+
+        /* Modal backdrop styles */
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+        }
+        .modal-content {
+            max-height: 90vh;
+            max-width: 95vw;
+        }
+    </style>
+    <!-- Load SheetJS (XLSX/CSV parsing) library -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <!-- Load Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body class="bg-gray-50 font-sans min-h-screen p-4 sm:p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-extrabold text-gray-900 mb-2">Task Log Analyzer</h1>
+            <p class="text-lg text-gray-500">Analyze task durations, apply time filters, and exclude unwanted logs.</p>
+        </header>
+
+        <!-- Main Card Container -->
+        <div class="bg-white shadow-2xl rounded-xl p-6 sm:p-8">
+
+            <!-- File Input & Instructions -->
+            <section class="mb-8 border-b pb-6">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">1. Upload Log File</h2>
+                <div class="flex flex-col sm:flex-row items-center justify-between">
+                    <input type="file" id="fileInput" accept=".csv, .xlsx" class="mb-4 sm:mb-0 block w-full text-sm text-gray-600
+                        file:mr-4 file:py-2 file:px-4
+                        file:rounded-full file:border-0
+                        file:text-sm file:font-semibold
+                        file:bg-primary/10 file:text-primary
+                        hover:file:bg-primary/20
+                        cursor-pointer">
+                    <div id="fileStatus" class="text-sm text-gray-500 italic ml-0 sm:ml-6 text-center sm:text-left">
+                        Awaiting file upload...
+                    </div>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">
+                    <strong class="font-bold">Required Columns:</strong> 'From' (Start Time), 'Details' (Task Name), and 'Duration' (in minutes).
+                </p>
+            </section>
+
+            <!-- Filters Section -->
+            <section class="mb-8 border-b pb-6">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">2. Apply Filters</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+                    <!-- Time Filter (Hour and Minute) - NOW EXCLUSION -->
+                    <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Exclude Logs During Time Range</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <!-- Start Time -->
+                            <div>
+                                <label for="startHour" class="block text-xs text-gray-500 mb-1">Start Hour</label>
+                                <input type="number" id="startHour" value="8" min="0" max="23"
+                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
+                            </div>
+                            <div>
+                                <label for="startMinute" class="block text-xs text-gray-500 mb-1">Start Minute</label>
+                                <input type="number" id="startMinute" value="0" min="0" max="59"
+                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
+                            </div>
+                            <!-- End Time -->
+                            <div>
+                                <label for="endHour" class="block text-xs text-gray-500 mb-1">End Hour</label>
+                                <input type="number" id="endHour" value="16" min="0" max="23"
+                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
+                            </div>
+                            <div>
+                                <label for="endMinute" class="block text-xs text-gray-500 mb-1">End Minute</label>
+                                <input type="number" id="endMinute" value="0" min="0" max="59"
+                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-2">Logs starting within this time range (your working hours) will be **excluded**.</p>
+                    </div>
+
+                    <!-- Weekend Inclusion -->
+                    <div class="bg-gray-50 p-4 rounded-lg shadow-inner flex flex-col justify-center">
+                         <h3 class="text-sm font-medium text-gray-700 mb-4">Weekend Rule</h3>
+                        <div class="flex items-center">
+                            <input id="includeWeekends" type="checkbox"
+                                class="h-5 w-5 text-primary rounded border-gray-300 focus:ring-primary">
+                            <label for="includeWeekends" class="ml-3 block text-sm font-medium text-gray-700">
+                                Include Weekends
+                            </label>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-2">If checked, all logs on Saturday and Sunday are **included**, overriding the time filter.</p>
+                    </div>
+
+
+                    <!-- Exclusion Filter -->
+                    <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
+                        <label for="exclusionList" class="block text-sm font-medium text-gray-700 mb-2">Exclude Tasks by Name (Comma Separated)</label>
+                        <textarea id="exclusionList" rows="3" placeholder="e.g., Idle, Break, Uncategorized"
+                            class="w-full rounded-lg border-gray-300 shadow-sm p-2 resize-none focus:border-primary focus:ring-primary transition">Idle, Break</textarea>
+                        <p class="text-xs text-gray-400 mt-2">Logs containing any of these terms (case-insensitive) will be excluded.</p>
+                    </div>
+                </div>
+
+                <div class="mt-6 flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
+                    <button id="analyzeButton" disabled
+                        class="px-8 py-3 bg-primary text-white font-bold rounded-full shadow-lg shadow-primary/30 hover:bg-primary/90 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Analyze & Filter Logs
+                    </button>
+                    <button id="reportButton" disabled
+                        class="px-8 py-3 bg-secondary text-white font-bold rounded-full shadow-lg shadow-secondary/30 hover:bg-secondary/90 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Generate Report (Charts)
+                    </button>
+                    <!-- NEW GEMINI INSIGHT BUTTON -->
+                    <button id="insightButton" disabled
+                        class="px-8 py-3 bg-indigo-500 text-white font-bold rounded-full shadow-lg shadow-indigo-500/30 hover:bg-indigo-600 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Get Time Insight ✨
+                    </button>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">3. Results Summary</h2>
+
+                <!-- Total Duration & Metrics -->
+                <div class="flex flex-wrap justify-around text-center mb-6 p-4 rounded-lg bg-primary/10 border-l-4 border-primary">
+                    <div class="p-2">
+                        <div class="text-4xl font-extrabold text-primary" id="totalDurationDisplay">0h 0m 0s</div>
+                        <div class="text-sm font-medium text-gray-600">Total Filtered Duration</div>
+                    </div>
+                    <div class="p-2">
+                        <div class="text-4xl font-extrabold text-primary" id="logCountDisplay">0</div>
+                        <div class="text-sm font-medium text-gray-600">Total Filtered Entries</div>
+                    </div>
+                </div>
+
+                <!-- LLM Insight Card (NEW) -->
+                <div id="insightCard" class="hidden mt-6">
+                    <h3 class="text-xl font-semibold text-indigo-600 mb-3 flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-2.5 14h-1v-4h-2v4h-1Zm6 0h-1v-4h-2v4h-1Z"/></svg>
+                        Time Allocation Insight ✨
+                    </h3>
+                    <div id="insightContent" class="p-4 bg-indigo-50 border border-indigo-200 rounded-lg shadow-md min-h-[100px]">
+                        <p class="text-gray-500 italic">Click 'Get Time Insight ✨' to analyze the filtered data...</p>
+                    </div>
+                </div>
+                
+                <!-- Filtered Log Table -->
+                <h3 class="text-xl font-medium text-gray-700 mb-3 mt-6">Filtered Log Details</h3>
+                <div class="log-scroll max-h-96 overflow-y-auto border border-gray-200 rounded-lg shadow-sm">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100 sticky top-0">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Task Name</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Start Time</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">End Time</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200" id="logTableBody">
+                            <tr><td colspan="4" class="text-center py-4 text-gray-500 italic">Upload a file and click 'Analyze' to see results.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Error Message Display -->
+                <div id="errorMessage" class="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg hidden" role="alert"></div>
+            </section>
+
+        </div>
+    </div>
+
+    <!-- Chart Report Modal -->
+    <div id="reportModal" class="modal-backdrop">
+        <div class="modal-content bg-white p-6 rounded-xl shadow-2xl overflow-y-auto w-11/12 md:w-3/4 lg:w-2/3">
+            <div class="flex justify-between items-center border-b pb-3 mb-4">
+                <h2 class="text-2xl font-bold text-gray-800">Time Allocation Report</h2>
+                <button onclick="closeReportModal()" class="text-gray-400 hover:text-gray-700 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            
+            <div id="reportContent">
+                <p id="reportMessage" class="text-center text-lg text-gray-500 my-8">No data to display in the report.</p>
+                
+                <!-- Task Distribution Chart -->
+                <div id="taskChartContainer" class="hidden my-6">
+                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Top Task Distribution (by Duration)</h3>
+                    <div class="md:grid md:grid-cols-2">
+                        <div class="h-80 w-full mb-6 md:mb-0">
+                            <canvas id="taskDistributionChart"></canvas>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg overflow-auto max-h-80">
+                            <h4 class="text-sm font-medium text-gray-600 mb-2">Data Breakdown:</h4>
+                            <ul id="taskLegendList" class="text-sm space-y-1">
+                                <!-- Chart legend will be injected here -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hourly Activity Chart -->
+                <div id="hourlyChartContainer" class="hidden my-6">
+                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Hourly Activity (Total Minutes per Hour)</h3>
+                    <div class="h-80 w-full">
+                        <canvas id="hourlyActivityChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-6 pt-4 border-t text-right">
+                <button onclick="closeReportModal()" class="px-6 py-2 bg-gray-200 text-gray-800 font-medium rounded-full hover:bg-gray-300 transition">
+                    Close Report
+                </button>
+            </div>
+        </div>
+    </div>
+    <!-- End Chart Report Modal -->
+
+    <script>
+        // Global variables
+        let rawLogData = [];
+        let filteredLogData = []; // Store filtered logs for the report
+        let currentTaskChart = null; // To hold Chart.js instances
+        let currentHourlyChart = null;
+
+        const fileInput = document.getElementById('fileInput');
+        const analyzeButton = document.getElementById('analyzeButton');
+        const reportButton = document.getElementById('reportButton');
+        const insightButton = document.getElementById('insightButton'); // NEW
+        const startHourInput = document.getElementById('startHour');
+        const startMinuteInput = document.getElementById('startMinute');
+        const endHourInput = document.getElementById('endHour');
+        const endMinuteInput = document.getElementById('endMinute');
+        const exclusionListInput = document.getElementById('exclusionList');
+        const includeWeekendsCheckbox = document.getElementById('includeWeekends');
+        const logTableBody = document.getElementById('logTableBody');
+        const totalDurationDisplay = document.getElementById('totalDurationDisplay');
+        const logCountDisplay = document.getElementById('logCountDisplay');
+        const fileStatus = document.getElementById('fileStatus');
+        const errorMessageDiv = document.getElementById('errorMessage');
+        const reportModal = document.getElementById('reportModal');
+        const insightCard = document.getElementById('insightCard'); // NEW
+        const insightContent = document.getElementById('insightContent'); // NEW
+
+        // Gemini API Configuration
+        const GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20';
+        const apiKey = "";
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+
+        // --- Utility Functions ---
+
+        /**
+         * Converts milliseconds to a human-readable duration string (Hh Mm Ss).
+         * @param {number} ms - Duration in milliseconds.
+         * @returns {string} Formatted duration.
+         */
+        const formatDuration = (ms) => {
+            if (ms < 0) return '0h 0m 0s';
+            const totalSeconds = Math.floor(ms / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            return `${hours}h ${minutes}m ${seconds}s`;
+        };
+        
+        /**
+         * Converts a duration value (string "HH:MM:SS" or number in minutes) to milliseconds.
+         * Assumes numeric duration is in minutes.
+         * @param {string | number} durationValue - The duration value from the log.
+         * @returns {number} Duration in milliseconds.
+         */
+        const parseDurationToMs = (durationValue) => {
+            if (typeof durationValue === 'number') {
+                // If it's a number, assume it represents MINUTES.
+                // Convert minutes to milliseconds (minutes * 60 seconds/min * 1000 ms/sec)
+                return durationValue * 60 * 1000;
+            }
+
+            if (typeof durationValue === 'string') {
+                const parts = durationValue.split(':');
+                let ms = 0;
+                // HH:MM:SS or H:MM:SS format
+                if (parts.length === 3) {
+                    const [hours, minutes, seconds] = parts.map(Number);
+                    ms = (hours * 3600 + minutes * 60 + seconds) * 1000;
+                } 
+                // MM:SS format
+                else if (parts.length === 2) {
+                    const [minutes, seconds] = parts.map(Number);
+                    ms = (minutes * 60 + seconds) * 1000;
+                }
+                return ms;
+            }
+
+            return 0;
+        };
+
+
+        /**
+         * Parses the log entry time string into a Date object.
+         * @param {string} timeStr - The time string from the log.
+         * @returns {Date | null} The parsed Date object or null on failure.
+         */
+        const parseTime = (timeStr) => {
+            if (!timeStr) return null;
+            
+            // If SheetJS has already converted it to a Date object, use it directly
+            if (timeStr instanceof Date) {
+                return timeStr;
+            }
+
+            // Attempt to parse standard formats
+            let date = new Date(timeStr);
+            if (!isNaN(date)) {
+                return date;
+            }
+            
+            // Fallback for common Excel/CSV formats (e.g., 'MM/DD/YYYY HH:MM:SS')
+            try {
+                // If the string contains only a time component and is less than 10 characters, assume it's relative to today
+                if (timeStr.length < 10 && timeStr.includes(':')) {
+                    const [hours, minutes, seconds] = timeStr.split(':').map(Number);
+                    const now = new Date();
+                    now.setHours(hours || 0, minutes || 0, seconds || 0, 0);
+                    return now;
+                }
+            } catch (e) {
+                console.error("Custom time parse failed:", e);
+                return null;
+            }
+            return null;
+        };
+
+        /**
+         * Displays an error message to the user.
+         * @param {string} message - The error message.
+         */
+        const displayError = (message) => {
+            errorMessageDiv.textContent = message;
+            errorMessageDiv.classList.remove('hidden');
+            logTableBody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-red-500 italic">Error processing file. See message above.</td></tr>';
+            totalDurationDisplay.textContent = '0h 0m 0s';
+            logCountDisplay.textContent = '0';
+            reportButton.disabled = true; // Disable report button on error
+            insightButton.disabled = true; // Disable insight button on error
+        };
+
+        /**
+         * Clears any displayed error messages.
+         */
+        const clearError = () => {
+            errorMessageDiv.classList.add('hidden');
+            errorMessageDiv.textContent = '';
+        };
+
+        // --- Main Logic ---
+
+        /**
+         * Filters and processes the log data based on current settings.
+         */
+        const processLogs = () => {
+            clearError();
+            filteredLogData = []; // Clear previous filtered data
+
+            if (rawLogData.length === 0) {
+                reportButton.disabled = true;
+                insightButton.disabled = true;
+                renderResults([], 0);
+                return;
+            }
+
+            // Reset insight content
+            insightCard.classList.add('hidden');
+            insightContent.innerHTML = '<p class="text-gray-500 italic">Click \'Get Time Insight ✨\' to analyze the filtered data...</p>';
+
+
+            const startHour = parseInt(startHourInput.value, 10);
+            const startMinute = parseInt(startMinuteInput.value, 10);
+            const endHour = parseInt(endHourInput.value, 10);
+            const endMinute = parseInt(endMinuteInput.value, 10);
+            const includeWeekends = includeWeekendsCheckbox.checked;
+
+            const exclusionTerms = exclusionListInput.value
+                .split(',')
+                .map(term => term.trim().toLowerCase())
+                .filter(term => term.length > 0);
+
+            let totalDurationMs = 0;
+            const tempFilteredLogs = [];
+
+            // 1. Validate column names
+            const requiredColumns = ['From', 'Details', 'Duration'];
+            const dataKeys = Object.keys(rawLogData[0] || {});
+            const missingColumns = requiredColumns.filter(col => !dataKeys.includes(col));
+
+            if (missingColumns.length > 0) {
+                displayError(`Missing required columns in your file: ${missingColumns.join(', ')}. Please ensure your columns are named exactly as required.`);
+                return;
+            }
+
+
+            rawLogData.forEach(log => {
+                const startTime = parseTime(log['From']);
+                const taskName = String(log['Details'] || '').toLowerCase();
+                const durationMs = parseDurationToMs(log['Duration']);
+
+                // Calculate End Time from Start Time and Duration
+                const endTime = startTime ? new Date(startTime.getTime() + durationMs) : null;
+                
+                // Skip logs where time parsing failed or duration is zero/invalid
+                if (!startTime || !endTime || durationMs <= 0) {
+                    return;
+                }
+
+                // --- Filtering Stage ---
+
+                // 1. Exclude Filter (by name)
+                const isExcludedByName = exclusionTerms.some(term => taskName.includes(term));
+                if (isExcludedByName) {
+                    return;
+                }
+                
+                // 2. Weekend Exclusion/Inclusion Rule
+                const logDay = startTime.getDay(); // 0=Sunday, 6=Saturday
+                const isWeekend = (logDay === 0 || logDay === 6);
+
+                if (isWeekend && !includeWeekends) {
+                    // If it's a weekend AND the user does NOT want weekends, skip it entirely.
+                    return;
+                }
+
+                // 3. Time Exclusion Filter (Applies to Weekdays, ignored if it's a Weekend and includeWeekends is true)
+                // If it's a weekend and includeWeekends is true, it passes this entire block and is INCLUDED.
+                if (!isWeekend) {
+                    
+                    const logStartTotalMinutes = (startTime.getHours() * 60) + startTime.getMinutes();
+                    const filterStartTotalMinutes = (startHour * 60) + startMinute;
+                    const filterEndTotalMinutes = (endHour * 60) + endMinute;
+
+                    let isInsideExclusionRange = false;
+
+                    // Calculate if the log's start time falls *within* the exclusion range
+                    if (filterStartTotalMinutes <= filterEndTotalMinutes) {
+                        // Normal range exclusion (e.g., exclude 9:00 to 17:59)
+                        isInsideExclusionRange = (logStartTotalMinutes >= filterStartTotalMinutes && logStartTotalMinutes <= filterEndTotalMinutes);
+                    } else {
+                        // Overnight range exclusion (e.g., exclude 23:00 to 07:00)
+                        isInsideExclusionRange = (logStartTotalMinutes >= filterStartTotalMinutes || logStartTotalMinutes <= filterEndTotalMinutes);
+                    }
+
+                    if (isInsideExclusionRange) {
+                        // If it's a weekday AND inside the working hours range, EXCLUDE it.
+                        return;
+                    }
+                }
+                
+                // --- Calculation Stage (Log is included) ---
+
+                // Add to total
+                totalDurationMs += durationMs;
+
+                // Add to filtered list with calculated duration
+                tempFilteredLogs.push({
+                    name: log['Details'],
+                    start: startTime, // Keep Date object for chart processing
+                    end: endTime, // Keep Date object
+                    durationMs: durationMs,
+                    durationFormatted: formatDuration(durationMs)
+                });
+            });
+
+            filteredLogData = tempFilteredLogs; // Store for reporting
+            renderResults(filteredLogData, totalDurationMs);
+            
+            const hasData = filteredLogData.length > 0;
+            reportButton.disabled = !hasData;
+            insightButton.disabled = !hasData;
+        };
+
+
+        /**
+         * Updates the UI with the filtered log data and total duration.
+         * @param {Array<Object>} logs - The array of filtered log objects.
+         * @param {number} totalDurationMs - The sum of all filtered durations.
+         */
+        const renderResults = (logs, totalDurationMs) => {
+            // Update Summary Metrics
+            totalDurationDisplay.textContent = formatDuration(totalDurationMs);
+            logCountDisplay.textContent = logs.length.toString();
+
+            // Render Table
+            if (logs.length === 0) {
+                logTableBody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-secondary italic">No logs matched your current filters.</td></tr>';
+                return;
+            }
+
+            const rowsHtml = logs.map(log => `
+                <tr class="hover:bg-gray-50 transition">
+                    <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate max-w-xs">${log.name}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">${log.start.toLocaleString()}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">${log.end.toLocaleString()}</td>
+                    <td class="px-4 py-3 text-sm font-semibold text-primary">${log.durationFormatted}</td>
+                </tr>
+            `).join('');
+
+            logTableBody.innerHTML = rowsHtml;
+        };
+
+
+        // --- Reporting Functions ---
+
+        const getChartColors = (count) => {
+            const colors = [
+                '#10B981', '#FBBF24', '#EF4444', '#3B82F6', '#8B5CF6', 
+                '#EC4899', '#14B8A6', '#F97316', '#6366F1', '#D946EF'
+            ];
+            // Cycle through colors if count is greater than 10
+            return Array.from({ length: count }, (_, i) => colors[i % colors.length]);
+        };
+
+        /**
+         * Aggregates duration by task name for the doughnut chart.
+         * @param {Array<Object>} logs - Filtered log data.
+         * @returns {Object} Data formatted for Chart.js.
+         */
+        const generateTaskTimeData = (logs) => {
+            const taskDurationMap = logs.reduce((acc, log) => {
+                const name = log.name || 'Unknown Task';
+                acc[name] = (acc[name] || 0) + log.durationMs;
+                return acc;
+            }, {});
+
+            // Sort tasks by duration descending
+            const sortedTasks = Object.entries(taskDurationMap)
+                .sort(([, durationA], [, durationB]) => durationB - durationA);
+
+            const topN = 10;
+            const topTasks = sortedTasks.slice(0, topN);
+            const otherTasks = sortedTasks.slice(topN);
+
+            let otherDuration = otherTasks.reduce((sum, [, duration]) => sum + duration, 0);
+
+            let labels = topTasks.map(([name]) => name);
+            let data = topTasks.map(([, duration]) => duration);
+
+            if (otherDuration > 0) {
+                labels.push('Other Tasks');
+                data.push(otherDuration);
+            }
+
+            const totalDuration = data.reduce((sum, duration) => sum + duration, 0);
+            
+            return {
+                labels,
+                data,
+                totalDuration,
+                topTasks: sortedTasks.slice(0, 5) // Return top 5 for LLM prompt
+            };
+        };
+
+        /**
+         * Aggregates total duration (in minutes) for each hour of the day.
+         * @param {Array<Object>} logs - Filtered log data.
+         * @returns {Object} Data formatted for Chart.js.
+         */
+        const generateHourlyData = (logs) => {
+            const hourlyMinutes = new Array(24).fill(0);
+
+            logs.forEach(log => {
+                const startHour = log.start.getHours();
+                // Convert milliseconds to minutes, rounded up
+                const durationMinutes = Math.ceil(log.durationMs / (60 * 1000));
+                hourlyMinutes[startHour] += durationMinutes;
+            });
+
+            const labels = Array.from({ length: 24 }, (_, i) => `${i}:00`);
+            
+            return {
+                labels,
+                data: hourlyMinutes
+            };
+        };
+        
+        /**
+         * Opens the modal and renders the charts based on filtered data.
+         */
+        const generateReport = () => {
+            const containerMsg = document.getElementById('reportMessage');
+            const taskContainer = document.getElementById('taskChartContainer');
+            const hourlyContainer = document.getElementById('hourlyChartContainer');
+            
+            // Hide everything initially
+            containerMsg.classList.add('hidden');
+            taskContainer.classList.add('hidden');
+            hourlyContainer.classList.add('hidden');
+
+            if (filteredLogData.length === 0) {
+                containerMsg.textContent = "Please filter your logs first. The current filtered set is empty.";
+                containerMsg.classList.remove('hidden');
+                reportModal.style.display = 'flex';
+                return;
+            }
+
+            const taskData = generateTaskTimeData(filteredLogData);
+            const hourlyData = generateHourlyData(filteredLogData);
+
+            if (currentTaskChart) currentTaskChart.destroy();
+            if (currentHourlyChart) currentHourlyChart.destroy();
+
+            // --- 1. Task Distribution Chart (Doughnut) ---
+            const taskCtx = document.getElementById('taskDistributionChart').getContext('2d');
+            const taskColors = getChartColors(taskData.labels.length);
+
+            taskContainer.classList.remove('hidden');
+
+            currentTaskChart = new Chart(taskCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: taskData.labels,
+                    datasets: [{
+                        label: 'Time Spent (ms)',
+                        data: taskData.data,
+                        backgroundColor: taskColors,
+                        hoverOffset: 8,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false,
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.label || '';
+                                    const value = context.parsed || 0;
+                                    const percentage = (value / taskData.totalDuration * 100).toFixed(1);
+                                    return `${label}: ${formatDuration(value)} (${percentage}%)`;
+                                }
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Top Task Time Breakdown',
+                            font: { size: 16 }
+                        }
+                    }
+                }
+            });
+
+            // Populate custom legend
+            const legendList = document.getElementById('taskLegendList');
+            legendList.innerHTML = '';
+            taskData.labels.forEach((label, index) => {
+                const duration = taskData.data[index];
+                const percentage = (duration / taskData.totalDuration * 100).toFixed(1);
+                const color = taskColors[index];
+                
+                const listItem = document.createElement('li');
+                listItem.className = 'flex items-center space-x-2';
+                listItem.innerHTML = `
+                    <span class="w-3 h-3 rounded-full" style="background-color: ${color};"></span>
+                    <span class="font-semibold">${label}:</span>
+                    <span class="text-gray-700">${formatDuration(duration)}</span>
+                    <span class="text-sm text-gray-500">(${percentage}%)</span>
+                `;
+                legendList.appendChild(listItem);
+            });
+
+
+            // --- 2. Hourly Activity Chart (Bar) ---
+            const hourlyCtx = document.getElementById('hourlyActivityChart').getContext('2d');
+            hourlyContainer.classList.remove('hidden');
+
+            currentHourlyChart = new Chart(hourlyCtx, {
+                type: 'bar',
+                data: {
+                    labels: hourlyData.labels,
+                    datasets: [{
+                        label: 'Total Minutes Logged',
+                        data: hourlyData.data,
+                        backgroundColor: taskColors[0], // Use primary color
+                        borderColor: taskColors[0],
+                        borderWidth: 1,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        title: {
+                            display: true,
+                            text: 'Activity Distribution by Hour (Start Time)',
+                            font: { size: 16 }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const minutes = context.parsed.y || 0;
+                                    return `Minutes: ${minutes}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Minutes'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Hour of Day (0-23)'
+                            }
+                        }
+                    }
+                }
+            });
+
+            reportModal.style.display = 'flex';
+        };
+        
+        /**
+         * Closes the chart report modal.
+         */
+        const closeReportModal = () => {
+            reportModal.style.display = 'none';
+        };
+
+        // --- Gemini API Insight Function (NEW) ---
+
+        /**
+         * Prepares data and calls the Gemini API for time allocation insight.
+         */
+        const generateInsight = async () => {
+            if (filteredLogData.length === 0) {
+                insightContent.innerHTML = '<p class="text-secondary font-medium">No filtered data available for analysis. Please upload a file and apply filters first.</p>';
+                insightCard.classList.remove('hidden');
+                return;
+            }
+
+            insightCard.classList.remove('hidden');
+            insightContent.innerHTML = '<div class="flex items-center space-x-2"><div class="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500"></div><p class="text-indigo-600">Generating insight, please wait...</p></div>';
+            insightButton.disabled = true;
+
+            try {
+                const taskData = generateTaskTimeData(filteredLogData);
+                const totalDuration = taskData.totalDuration;
+                const topTasks = taskData.topTasks;
+
+                const topTasksString = topTasks.map(([name, duration]) => 
+                    `(${formatDuration(duration)}): ${name}`
+                ).join('; ');
+
+                const systemPrompt = `You are an objective Time Management Analyst. Your role is to analyze a user's filtered activity log (tasks performed outside of regular working hours) and provide a concise, single-paragraph summary of the key findings, including the total time spent and the nature of the activities. Then, provide 3 short, insightful bullet points with potential implications or suggestions for time management and work-life balance. Format the entire response in clean Markdown.`;
+                
+                const userQuery = `Analyze the following summary of filtered activities and provide insights. The data represents activities recorded outside of the user's normal working hours.
+                Total After-Hours/Filtered Duration: ${formatDuration(totalDuration)}.
+                Top activities by duration are: ${topTasksString}.`;
+
+                const payload = {
+                    contents: [{ parts: [{ text: userQuery }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] },
+                };
+
+                let response, result;
+                let attempt = 0;
+                const maxRetries = 3;
+
+                while (attempt < maxRetries) {
+                    try {
+                        response = await fetch(API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (response.ok) {
+                            result = await response.json();
+                            break; // Exit loop on success
+                        } else if (response.status === 429 && attempt < maxRetries - 1) {
+                            // Too many requests (Rate Limit) - implement exponential backoff
+                            const delay = Math.pow(2, attempt) * 1000;
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                            attempt++;
+                        } else {
+                            throw new Error(`API returned status ${response.status}: ${response.statusText}`);
+                        }
+                    } catch (e) {
+                        if (attempt === maxRetries - 1) throw e;
+                        attempt++;
+                    }
+                }
+
+                const generatedText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (generatedText) {
+                    // Convert markdown to basic HTML for better display within the card
+                    const htmlContent = generatedText
+                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+                        .replace(/\n\n/g, '<br><br>') // Paragraphs
+                        .replace(/^- /gm, '<li><span class="font-semibold text-primary/80">&bull;</span> ') // List items
+                        .replace(/\n\s*\n/g, '<br><br>') // Handle extra newlines
+                        .replace(/^(\* )/gm, '<li><span class="font-semibold text-primary/80">&bull;</span> ') // Handle different list formats
+                        .replace(/^(<li>.*)$/gm, '<ul class="list-disc ml-4 space-y-2">$1</ul>'); // Wrap list items
+
+                    insightContent.innerHTML = `<div class="prose max-w-none text-gray-700">${htmlContent}</div>`;
+                } else {
+                    insightContent.innerHTML = '<p class="text-red-500 font-medium">Failed to generate insight. Received an empty response from the AI model.</p>';
+                }
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                insightContent.innerHTML = `<p class="text-red-500 font-medium">An error occurred while generating insight: ${error.message}.</p>`;
+            } finally {
+                insightButton.disabled = false;
+            }
+        };
+
+
+        // --- Event Listeners and Initialization ---
+
+        // File Input Handler (Upload)
+        fileInput.addEventListener('change', function (e) {
+            rawLogData = [];
+            analyzeButton.disabled = true;
+            reportButton.disabled = true;
+            insightButton.disabled = true;
+            fileStatus.textContent = 'Processing file...';
+            clearError();
+
+            const file = e.target.files[0];
+            if (!file) {
+                fileStatus.textContent = 'Awaiting file upload...';
+                return;
+            }
+
+            const reader = new FileReader();
+
+            reader.onload = function(event) {
+                try {
+                    const data = new Uint8Array(event.target.result);
+                    const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    
+                    rawLogData = XLSX.utils.sheet_to_json(worksheet);
+
+                    if (rawLogData.length > 0) {
+                        fileStatus.textContent = `File loaded successfully! ${rawLogData.length} entries found.`;
+                        analyzeButton.disabled = false;
+                        processLogs();
+                    } else {
+                        fileStatus.textContent = 'File loaded, but no usable data rows found.';
+                    }
+                } catch (error) {
+                    console.error("File processing error:", error);
+                    displayError(`Failed to read the file. Please ensure it is a valid CSV or XLSX format. Error: ${error.message}`);
+                }
+            };
+
+            reader.onerror = (error) => {
+                console.error("FileReader error:", error);
+                displayError("An error occurred while reading the file from your disk.");
+            };
+
+            reader.readAsArrayBuffer(file);
+        });
+
+        // Analyze Button and Filter Change Handler
+        analyzeButton.addEventListener('click', processLogs);
+        reportButton.addEventListener('click', generateReport);
+        insightButton.addEventListener('click', generateInsight); // NEW
+
+        // Add listeners to all filter inputs to re-analyze when filters change
+        startHourInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
+        startMinuteInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
+        endHourInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
+        endMinuteInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
+        includeWeekendsCheckbox.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
+        exclusionListInput.addEventListener('input', () => analyzeButton.disabled === false && processLogs());
+
+        // Initial render for empty state
+        renderResults([], 0);
+
+        // Allow closing modal by clicking the backdrop
+        reportModal.addEventListener('click', function(e) {
+            if (e.target === reportModal) {
+                closeReportModal();
+            }
+        });
+
+    </script>
+</body>
+</html>
