@@ -3,945 +3,697 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Task Log Analyzer</title>
-    <!-- Load Tailwind CSS -->
+    <title>Activity Log Analyzer</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Configure Tailwind for Inter font -->
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                    },
-                    colors: {
-                        primary: '#10B981', // Emerald Green
-                        secondary: '#FBBF24', // Amber
-                    }
-                }
-            }
-        }
-    </script>
+    <!-- dayjs for date/time manipulation -->
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/isBetween.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/customParseFormat.js"></script>
+    <!-- SheetJS/xlsx for file parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
-        /* Custom scrollbar for log area */
-        .log-scroll::-webkit-scrollbar { width: 8px; }
-        .log-scroll::-webkit-scrollbar-thumb {
-            background-color: #D1D5DB;
+        :root {
+            --primary: 24 100 120; /* Dark Teal */
+            --secondary: 251 191 36; /* Amber */
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        .bento-card {
+            background-color: white;
+            border: 1px solid #e5e7eb;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .bento-card:hover {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+        }
+        /* Custom scrollbar for log table */
+        #logEntriesContainer {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #logEntriesContainer::-webkit-scrollbar {
+            width: 8px;
+        }
+        #logEntriesContainer::-webkit-scrollbar-thumb {
+            background-color: rgb(var(--primary) / 0.5);
             border-radius: 4px;
         }
-        .log-scroll::-webkit-scrollbar-track {
-            background-color: #F3F4F6;
+        .text-primary-color {
+            color: rgb(var(--primary));
         }
-
-        /* Modal backdrop styles */
-        .modal-backdrop {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.7);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 50;
+        .bg-primary-color {
+            background-color: rgb(var(--primary));
         }
-        .modal-content {
-            max-height: 90vh;
-            max-width: 95vw;
+        /* Ensure table content wraps to accommodate long titles */
+        .log-table-details {
+            white-space: normal;
         }
     </style>
-    <!-- Load SheetJS (XLSX/CSV parsing) library -->
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
-    <!-- Load Chart.js for data visualization -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
-</head>
-<body class="bg-gray-50 font-sans min-h-screen p-4 sm:p-8">
-
-    <div class="max-w-6xl mx-auto">
-        <header class="text-center mb-8">
-            <h1 class="text-4xl font-extrabold text-gray-900 mb-2">Task Log Analyzer</h1>
-            <p class="text-lg text-gray-500">Analyze task durations, apply time filters, and exclude unwanted logs.</p>
-        </header>
-
-        <!-- Main Card Container -->
-        <div class="bg-white shadow-2xl rounded-xl p-6 sm:p-8">
-
-            <!-- File Input & Instructions -->
-            <section class="mb-8 border-b pb-6">
-                <h2 class="text-2xl font-semibold text-gray-800 mb-4">1. Upload Log File</h2>
-                <div class="flex flex-col sm:flex-row items-center justify-between">
-                    <input type="file" id="fileInput" accept=".csv, .xlsx" class="mb-4 sm:mb-0 block w-full text-sm text-gray-600
-                        file:mr-4 file:py-2 file:px-4
-                        file:rounded-full file:border-0
-                        file:text-sm file:font-semibold
-                        file:bg-primary/10 file:text-primary
-                        hover:file:bg-primary/20
-                        cursor-pointer">
-                    <div id="fileStatus" class="text-sm text-gray-500 italic ml-0 sm:ml-6 text-center sm:text-left">
-                        Awaiting file upload...
-                    </div>
-                </div>
-                <p class="text-xs text-gray-400 mt-2">
-                    <strong class="font-bold">Required Columns:</strong> 'From' (Start Time), 'Details' (Task Name), and 'Duration' (in minutes).
-                </p>
-            </section>
-
-            <!-- Filters Section -->
-            <section class="mb-8 border-b pb-6">
-                <h2 class="text-2xl font-semibold text-gray-800 mb-4">2. Apply Filters</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-
-                    <!-- Time Filter (Hour and Minute) - NOW EXCLUSION -->
-                    <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Exclude Logs During Time Range</label>
-                        <div class="grid grid-cols-2 gap-3">
-                            <!-- Start Time -->
-                            <div>
-                                <label for="startHour" class="block text-xs text-gray-500 mb-1">Start Hour</label>
-                                <input type="number" id="startHour" value="8" min="0" max="23"
-                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
-                            </div>
-                            <div>
-                                <label for="startMinute" class="block text-xs text-gray-500 mb-1">Start Minute</label>
-                                <input type="number" id="startMinute" value="0" min="0" max="59"
-                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
-                            </div>
-                            <!-- End Time -->
-                            <div>
-                                <label for="endHour" class="block text-xs text-gray-500 mb-1">End Hour</label>
-                                <input type="number" id="endHour" value="16" min="0" max="23"
-                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
-                            </div>
-                            <div>
-                                <label for="endMinute" class="block text-xs text-gray-500 mb-1">End Minute</label>
-                                <input type="number" id="endMinute" value="0" min="0" max="59"
-                                    class="w-full rounded-lg border-gray-300 shadow-sm p-2 text-center focus:border-primary focus:ring-primary transition">
-                            </div>
-                        </div>
-                        <p class="text-xs text-gray-400 mt-2">Logs starting within this time range (your working hours) will be **excluded**.</p>
-                    </div>
-
-                    <!-- Weekend Inclusion -->
-                    <div class="bg-gray-50 p-4 rounded-lg shadow-inner flex flex-col justify-center">
-                         <h3 class="text-sm font-medium text-gray-700 mb-4">Weekend Rule</h3>
-                        <div class="flex items-center">
-                            <input id="includeWeekends" type="checkbox"
-                                class="h-5 w-5 text-primary rounded border-gray-300 focus:ring-primary">
-                            <label for="includeWeekends" class="ml-3 block text-sm font-medium text-gray-700">
-                                Include Weekends
-                            </label>
-                        </div>
-                        <p class="text-xs text-gray-400 mt-2">If checked, all logs on Saturday and Sunday are **included**, overriding the time filter.</p>
-                    </div>
-
-
-                    <!-- Exclusion Filter -->
-                    <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
-                        <label for="exclusionList" class="block text-sm font-medium text-gray-700 mb-2">Exclude Tasks by Name (Comma Separated)</label>
-                        <textarea id="exclusionList" rows="3" placeholder="e.g., Idle, Break, Uncategorized"
-                            class="w-full rounded-lg border-gray-300 shadow-sm p-2 resize-none focus:border-primary focus:ring-primary transition">Idle, Break</textarea>
-                        <p class="text-xs text-gray-400 mt-2">Logs containing any of these terms (case-insensitive) will be excluded.</p>
-                    </div>
-                </div>
-
-                <div class="mt-6 flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
-                    <button id="analyzeButton" disabled
-                        class="px-8 py-3 bg-primary text-white font-bold rounded-full shadow-lg shadow-primary/30 hover:bg-primary/90 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
-                        Analyze & Filter Logs
-                    </button>
-                    <button id="reportButton" disabled
-                        class="px-8 py-3 bg-secondary text-white font-bold rounded-full shadow-lg shadow-secondary/30 hover:bg-secondary/90 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
-                        Generate Report (Charts)
-                    </button>
-                    <!-- NEW GEMINI INSIGHT BUTTON -->
-                    <button id="insightButton" disabled
-                        class="px-8 py-3 bg-indigo-500 text-white font-bold rounded-full shadow-lg shadow-indigo-500/30 hover:bg-indigo-600 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
-                        Get Time Insight ✨
-                    </button>
-                </div>
-            </section>
-
-            <!-- Results Section -->
-            <section>
-                <h2 class="text-2xl font-semibold text-gray-800 mb-4">3. Results Summary</h2>
-
-                <!-- Total Duration & Metrics -->
-                <div class="flex flex-wrap justify-around text-center mb-6 p-4 rounded-lg bg-primary/10 border-l-4 border-primary">
-                    <div class="p-2">
-                        <div class="text-4xl font-extrabold text-primary" id="totalDurationDisplay">0h 0m 0s</div>
-                        <div class="text-sm font-medium text-gray-600">Total Filtered Duration</div>
-                    </div>
-                    <div class="p-2">
-                        <div class="text-4xl font-extrabold text-primary" id="logCountDisplay">0</div>
-                        <div class="text-sm font-medium text-gray-600">Total Filtered Entries</div>
-                    </div>
-                </div>
-
-                <!-- LLM Insight Card (NEW) -->
-                <div id="insightCard" class="hidden mt-6">
-                    <h3 class="text-xl font-semibold text-indigo-600 mb-3 flex items-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-2.5 14h-1v-4h-2v4h-1Zm6 0h-1v-4h-2v4h-1Z"/></svg>
-                        Time Allocation Insight ✨
-                    </h3>
-                    <div id="insightContent" class="p-4 bg-indigo-50 border border-indigo-200 rounded-lg shadow-md min-h-[100px]">
-                        <p class="text-gray-500 italic">Click 'Get Time Insight ✨' to analyze the filtered data...</p>
-                    </div>
-                </div>
-                
-                <!-- Filtered Log Table -->
-                <h3 class="text-xl font-medium text-gray-700 mb-3 mt-6">Filtered Log Details</h3>
-                <div class="log-scroll max-h-96 overflow-y-auto border border-gray-200 rounded-lg shadow-sm">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-100 sticky top-0">
-                            <tr>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Task Name</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Start Time</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">End Time</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-200" id="logTableBody">
-                            <tr><td colspan="4" class="text-center py-4 text-gray-500 italic">Upload a file and click 'Analyze' to see results.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Error Message Display -->
-                <div id="errorMessage" class="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg hidden" role="alert"></div>
-            </section>
-
-        </div>
-    </div>
-
-    <!-- Chart Report Modal -->
-    <div id="reportModal" class="modal-backdrop">
-        <div class="modal-content bg-white p-6 rounded-xl shadow-2xl overflow-y-auto w-11/12 md:w-3/4 lg:w-2/3">
-            <div class="flex justify-between items-center border-b pb-3 mb-4">
-                <h2 class="text-2xl font-bold text-gray-800">Time Allocation Report</h2>
-                <button onclick="closeReportModal()" class="text-gray-400 hover:text-gray-700 transition">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                </button>
-            </div>
-            
-            <div id="reportContent">
-                <p id="reportMessage" class="text-center text-lg text-gray-500 my-8">No data to display in the report.</p>
-                
-                <!-- Task Distribution Chart -->
-                <div id="taskChartContainer" class="hidden my-6">
-                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Top Task Distribution (by Duration)</h3>
-                    <div class="md:grid md:grid-cols-2">
-                        <div class="h-80 w-full mb-6 md:mb-0">
-                            <canvas id="taskDistributionChart"></canvas>
-                        </div>
-                        <div class="bg-gray-50 p-4 rounded-lg overflow-auto max-h-80">
-                            <h4 class="text-sm font-medium text-gray-600 mb-2">Data Breakdown:</h4>
-                            <ul id="taskLegendList" class="text-sm space-y-1">
-                                <!-- Chart legend will be injected here -->
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Hourly Activity Chart -->
-                <div id="hourlyChartContainer" class="hidden my-6">
-                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Hourly Activity (Total Minutes per Hour)</h3>
-                    <div class="h-80 w-full">
-                        <canvas id="hourlyActivityChart"></canvas>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="mt-6 pt-4 border-t text-right">
-                <button onclick="closeReportModal()" class="px-6 py-2 bg-gray-200 text-gray-800 font-medium rounded-full hover:bg-gray-300 transition">
-                    Close Report
-                </button>
-            </div>
-        </div>
-    </div>
-    <!-- End Chart Report Modal -->
-
     <script>
-        // Global variables
-        let rawLogData = [];
-        let filteredLogData = []; // Store filtered logs for the report
-        let currentTaskChart = null; // To hold Chart.js instances
-        let currentHourlyChart = null;
-
-        const fileInput = document.getElementById('fileInput');
-        const analyzeButton = document.getElementById('analyzeButton');
-        const reportButton = document.getElementById('reportButton');
-        const insightButton = document.getElementById('insightButton'); // NEW
-        const startHourInput = document.getElementById('startHour');
-        const startMinuteInput = document.getElementById('startMinute');
-        const endHourInput = document.getElementById('endHour');
-        const endMinuteInput = document.getElementById('endMinute');
-        const exclusionListInput = document.getElementById('exclusionList');
-        const includeWeekendsCheckbox = document.getElementById('includeWeekends');
-        const logTableBody = document.getElementById('logTableBody');
-        const totalDurationDisplay = document.getElementById('totalDurationDisplay');
-        const logCountDisplay = document.getElementById('logCountDisplay');
-        const fileStatus = document.getElementById('fileStatus');
-        const errorMessageDiv = document.getElementById('errorMessage');
-        const reportModal = document.getElementById('reportModal');
-        const insightCard = document.getElementById('insightCard'); // NEW
-        const insightContent = document.getElementById('insightContent'); // NEW
-
-        // Gemini API Configuration
-        const GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20';
-        const apiKey = "";
-        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-
+        // Define state object for easier management
+        let state = {
+            appBaseName: 'Overtime Analysator', // Base name remains fixed
+            fileTitle: null, // Will hold the raw file name (e.g., timeentries - memory_aid_6_10_2025-comma)
+            allRows: [], // Stores all raw rows from the file for re-parsing
+            rawData: [], // Stores parsed and cleaned data (before filters)
+            filteredData: [],
+            summary: {
+                totalMinutes: 0,
+                totalHours: 0,
+                uniqueLogs: 0,
+            },
+            headers: [], // Stores headers from the uploaded file
+            // UPDATED: Now requires separate date and time columns
+            columnMap: { 
+                date: '', 
+                time: '',
+                details: '',
+                duration: ''
+            },
+            filters: {
+                // Time-only exclusion (HH:mm format)
+                excludeStart: '00:00', 
+                excludeEnd: '00:00',
+                includeWeekends: false,
+                excludeKeywords: '' // Keywords to filter out
+            },
+            isLoading: false,
+            error: null
+        };
 
         // --- Utility Functions ---
 
-        /**
-         * Converts milliseconds to a human-readable duration string (Hh Mm Ss).
-         * @param {number} ms - Duration in milliseconds.
-         * @returns {string} Formatted duration.
-         */
-        const formatDuration = (ms) => {
-            if (ms < 0) return '0h 0m 0s';
-            const totalSeconds = Math.floor(ms / 1000);
-            const hours = Math.floor(totalSeconds / 3600);
-            const minutes = Math.floor((totalSeconds % 3600) / 60);
-            const seconds = totalSeconds % 60;
-            return `${hours}h ${minutes}m ${seconds}s`;
-        };
-        
-        /**
-         * Converts a duration value (string "HH:MM:SS" or number in minutes) to milliseconds.
-         * Assumes numeric duration is in minutes.
-         * @param {string | number} durationValue - The duration value from the log.
-         * @returns {number} Duration in milliseconds.
-         */
-        const parseDurationToMs = (durationValue) => {
-            if (typeof durationValue === 'number') {
-                // If it's a number, assume it represents MINUTES.
-                // Convert minutes to milliseconds (minutes * 60 seconds/min * 1000 ms/sec)
-                return durationValue * 60 * 1000;
-            }
+        // Converts minutes to H hours, M minutes string
+        function formatDuration(minutes) {
+            if (typeof minutes !== 'number' || isNaN(minutes)) return '0 minutes';
+            const hours = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            let parts = [];
+            if (hours > 0) parts.push(`${hours}h`);
+            if (mins > 0 || hours === 0) parts.push(`${mins}m`);
+            return parts.join(' ');
+        }
 
-            if (typeof durationValue === 'string') {
-                const parts = durationValue.split(':');
-                let ms = 0;
-                // HH:MM:SS or H:MM:SS format
-                if (parts.length === 3) {
-                    const [hours, minutes, seconds] = parts.map(Number);
-                    ms = (hours * 3600 + minutes * 60 + seconds) * 1000;
-                } 
-                // MM:SS format
-                else if (parts.length === 2) {
-                    const [minutes, seconds] = parts.map(Number);
-                    ms = (minutes * 60 + seconds) * 1000;
-                }
-                return ms;
-            }
+        // Formats a Date object to a readable string (e.g., Mon, 6/Oct 09:00)
+        function formatDateTime(dateTime) {
+            return dayjs(dateTime).format('ddd, D/MMM HH:mm');
+        }
 
-            return 0;
-        };
-
-
-        /**
-         * Parses the log entry time string into a Date object.
-         * @param {string} timeStr - The time string from the log.
-         * @returns {Date | null} The parsed Date object or null on failure.
-         */
-        const parseTime = (timeStr) => {
-            if (!timeStr) return null;
-            
-            // If SheetJS has already converted it to a Date object, use it directly
-            if (timeStr instanceof Date) {
-                return timeStr;
-            }
-
-            // Attempt to parse standard formats
-            let date = new Date(timeStr);
-            if (!isNaN(date)) {
-                return date;
-            }
-            
-            // Fallback for common Excel/CSV formats (e.g., 'MM/DD/YYYY HH:MM:SS')
-            try {
-                // If the string contains only a time component and is less than 10 characters, assume it's relative to today
-                if (timeStr.length < 10 && timeStr.includes(':')) {
-                    const [hours, minutes, seconds] = timeStr.split(':').map(Number);
-                    const now = new Date();
-                    now.setHours(hours || 0, minutes || 0, seconds || 0, 0);
-                    return now;
-                }
-            } catch (e) {
-                console.error("Custom time parse failed:", e);
-                return null;
-            }
-            return null;
-        };
-
-        /**
-         * Displays an error message to the user.
-         * @param {string} message - The error message.
-         */
-        const displayError = (message) => {
-            errorMessageDiv.textContent = message;
-            errorMessageDiv.classList.remove('hidden');
-            logTableBody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-red-500 italic">Error processing file. See message above.</td></tr>';
-            totalDurationDisplay.textContent = '0h 0m 0s';
-            logCountDisplay.textContent = '0';
-            reportButton.disabled = true; // Disable report button on error
-            insightButton.disabled = true; // Disable insight button on error
-        };
-
-        /**
-         * Clears any displayed error messages.
-         */
-        const clearError = () => {
-            errorMessageDiv.classList.add('hidden');
-            errorMessageDiv.textContent = '';
-        };
-
-        // --- Main Logic ---
-
-        /**
-         * Filters and processes the log data based on current settings.
-         */
-        const processLogs = () => {
-            clearError();
-            filteredLogData = []; // Clear previous filtered data
-
-            if (rawLogData.length === 0) {
-                reportButton.disabled = true;
-                insightButton.disabled = true;
-                renderResults([], 0);
-                return;
-            }
-
-            // Reset insight content
-            insightCard.classList.add('hidden');
-            insightContent.innerHTML = '<p class="text-gray-500 italic">Click \'Get Time Insight ✨\' to analyze the filtered data...</p>';
-
-
-            const startHour = parseInt(startHourInput.value, 10);
-            const startMinute = parseInt(startMinuteInput.value, 10);
-            const endHour = parseInt(endHourInput.value, 10);
-            const endMinute = parseInt(endMinuteInput.value, 10);
-            const includeWeekends = includeWeekendsCheckbox.checked;
-
-            const exclusionTerms = exclusionListInput.value
-                .split(',')
-                .map(term => term.trim().toLowerCase())
-                .filter(term => term.length > 0);
-
-            let totalDurationMs = 0;
-            const tempFilteredLogs = [];
-
-            // 1. Validate column names
-            const requiredColumns = ['From', 'Details', 'Duration'];
-            const dataKeys = Object.keys(rawLogData[0] || {});
-            const missingColumns = requiredColumns.filter(col => !dataKeys.includes(col));
-
-            if (missingColumns.length > 0) {
-                displayError(`Missing required columns in your file: ${missingColumns.join(', ')}. Please ensure your columns are named exactly as required.`);
-                return;
-            }
-
-
-            rawLogData.forEach(log => {
-                const startTime = parseTime(log['From']);
-                const taskName = String(log['Details'] || '').toLowerCase();
-                const durationMs = parseDurationToMs(log['Duration']);
-
-                // Calculate End Time from Start Time and Duration
-                const endTime = startTime ? new Date(startTime.getTime() + durationMs) : null;
-                
-                // Skip logs where time parsing failed or duration is zero/invalid
-                if (!startTime || !endTime || durationMs <= 0) {
-                    return;
-                }
-
-                // --- Filtering Stage ---
-
-                // 1. Exclude Filter (by name)
-                const isExcludedByName = exclusionTerms.some(term => taskName.includes(term));
-                if (isExcludedByName) {
-                    return;
-                }
-                
-                // 2. Weekend Exclusion/Inclusion Rule
-                const logDay = startTime.getDay(); // 0=Sunday, 6=Saturday
-                const isWeekend = (logDay === 0 || logDay === 6);
-
-                if (isWeekend && !includeWeekends) {
-                    // If it's a weekend AND the user does NOT want weekends, skip it entirely.
-                    return;
-                }
-
-                // 3. Time Exclusion Filter (Applies to Weekdays, ignored if it's a Weekend and includeWeekends is true)
-                // If it's a weekend and includeWeekends is true, it passes this entire block and is INCLUDED.
-                if (!isWeekend) {
-                    
-                    const logStartTotalMinutes = (startTime.getHours() * 60) + startTime.getMinutes();
-                    const filterStartTotalMinutes = (startHour * 60) + startMinute;
-                    const filterEndTotalMinutes = (endHour * 60) + endMinute;
-
-                    let isInsideExclusionRange = false;
-
-                    // Calculate if the log's start time falls *within* the exclusion range
-                    if (filterStartTotalMinutes <= filterEndTotalMinutes) {
-                        // Normal range exclusion (e.g., exclude 9:00 to 17:59)
-                        isInsideExclusionRange = (logStartTotalMinutes >= filterStartTotalMinutes && logStartTotalMinutes <= filterEndTotalMinutes);
-                    } else {
-                        // Overnight range exclusion (e.g., exclude 23:00 to 07:00)
-                        isInsideExclusionRange = (logStartTotalMinutes >= filterStartTotalMinutes || logStartTotalMinutes <= filterEndTotalMinutes);
-                    }
-
-                    if (isInsideExclusionRange) {
-                        // If it's a weekday AND inside the working hours range, EXCLUDE it.
-                        return;
-                    }
-                }
-                
-                // --- Calculation Stage (Log is included) ---
-
-                // Add to total
-                totalDurationMs += durationMs;
-
-                // Add to filtered list with calculated duration
-                tempFilteredLogs.push({
-                    name: log['Details'],
-                    start: startTime, // Keep Date object for chart processing
-                    end: endTime, // Keep Date object
-                    durationMs: durationMs,
-                    durationFormatted: formatDuration(durationMs)
-                });
-            });
-
-            filteredLogData = tempFilteredLogs; // Store for reporting
-            renderResults(filteredLogData, totalDurationMs);
-            
-            const hasData = filteredLogData.length > 0;
-            reportButton.disabled = !hasData;
-            insightButton.disabled = !hasData;
-        };
-
-
-        /**
-         * Updates the UI with the filtered log data and total duration.
-         * @param {Array<Object>} logs - The array of filtered log objects.
-         * @param {number} totalDurationMs - The sum of all filtered durations.
-         */
-        const renderResults = (logs, totalDurationMs) => {
-            // Update Summary Metrics
-            totalDurationDisplay.textContent = formatDuration(totalDurationMs);
-            logCountDisplay.textContent = logs.length.toString();
-
-            // Render Table
-            if (logs.length === 0) {
-                logTableBody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-secondary italic">No logs matched your current filters.</td></tr>';
-                return;
-            }
-
-            const rowsHtml = logs.map(log => `
-                <tr class="hover:bg-gray-50 transition">
-                    <td class="px-4 py-3 text-sm font-medium text-gray-900 truncate max-w-xs">${log.name}</td>
-                    <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">${log.start.toLocaleString()}</td>
-                    <td class="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">${log.end.toLocaleString()}</td>
-                    <td class="px-4 py-3 text-sm font-semibold text-primary">${log.durationFormatted}</td>
-                </tr>
-            `).join('');
-
-            logTableBody.innerHTML = rowsHtml;
-        };
-
-
-        // --- Reporting Functions ---
-
-        const getChartColors = (count) => {
-            const colors = [
-                '#10B981', '#FBBF24', '#EF4444', '#3B82F6', '#8B5CF6', 
-                '#EC4899', '#14B8A6', '#F97316', '#6366F1', '#D946EF'
+        // Converts standard formats to Dayjs object using combined date/time string
+        function parseFromField(dateString) {
+            // Updated format list to handle combined date and time string: "M/D/YYYY HH:mm" or "D/M/YYYY HH:mm"
+            const formats = [
+                'M/D/YYYY H:mm', 'M/D/YYYY HH:mm', 
+                'D/M/YYYY H:mm', 'D/M/YYYY HH:mm', 
+                'M.D.YYYY H:mm', 'YYYY-MM-DD HH:mm'
             ];
-            // Cycle through colors if count is greater than 10
-            return Array.from({ length: count }, (_, i) => colors[i % colors.length]);
-        };
-
-        /**
-         * Aggregates duration by task name for the doughnut chart.
-         * @param {Array<Object>} logs - Filtered log data.
-         * @returns {Object} Data formatted for Chart.js.
-         */
-        const generateTaskTimeData = (logs) => {
-            const taskDurationMap = logs.reduce((acc, log) => {
-                const name = log.name || 'Unknown Task';
-                acc[name] = (acc[name] || 0) + log.durationMs;
-                return acc;
-            }, {});
-
-            // Sort tasks by duration descending
-            const sortedTasks = Object.entries(taskDurationMap)
-                .sort(([, durationA], [, durationB]) => durationB - durationA);
-
-            const topN = 10;
-            const topTasks = sortedTasks.slice(0, topN);
-            const otherTasks = sortedTasks.slice(topN);
-
-            let otherDuration = otherTasks.reduce((sum, [, duration]) => sum + duration, 0);
-
-            let labels = topTasks.map(([name]) => name);
-            let data = topTasks.map(([, duration]) => duration);
-
-            if (otherDuration > 0) {
-                labels.push('Other Tasks');
-                data.push(otherDuration);
-            }
-
-            const totalDuration = data.reduce((sum, duration) => sum + duration, 0);
-            
-            return {
-                labels,
-                data,
-                totalDuration,
-                topTasks: sortedTasks.slice(0, 5) // Return top 5 for LLM prompt
-            };
-        };
-
-        /**
-         * Aggregates total duration (in minutes) for each hour of the day.
-         * @param {Array<Object>} logs - Filtered log data.
-         * @returns {Object} Data formatted for Chart.js.
-         */
-        const generateHourlyData = (logs) => {
-            const hourlyMinutes = new Array(24).fill(0);
-
-            logs.forEach(log => {
-                const startHour = log.start.getHours();
-                // Convert milliseconds to minutes, rounded up
-                const durationMinutes = Math.ceil(log.durationMs / (60 * 1000));
-                hourlyMinutes[startHour] += durationMinutes;
-            });
-
-            const labels = Array.from({ length: 24 }, (_, i) => `${i}:00`);
-            
-            return {
-                labels,
-                data: hourlyMinutes
-            };
-        };
+            return dayjs(dateString, formats, true);
+        }
         
-        /**
-         * Opens the modal and renders the charts based on filtered data.
-         */
-        const generateReport = () => {
-            const containerMsg = document.getElementById('reportMessage');
-            const taskContainer = document.getElementById('taskChartContainer');
-            const hourlyContainer = document.getElementById('hourlyChartContainer');
-            
-            // Hide everything initially
-            containerMsg.classList.add('hidden');
-            taskContainer.classList.add('hidden');
-            hourlyContainer.classList.add('hidden');
+        // Helper to guess column names based on keywords
+        function guessColumn(headers, keywords) {
+            for (const keyword of keywords) {
+                const match = headers.find(h => typeof h === 'string' && h.toLowerCase().includes(keyword));
+                if (match) return match;
+            }
+            return '';
+        }
 
-            if (filteredLogData.length === 0) {
-                containerMsg.textContent = "Please filter your logs first. The current filtered set is empty.";
-                containerMsg.classList.remove('hidden');
-                reportModal.style.display = 'flex';
+        function calculateSummary() {
+            const totalMinutes = state.filteredData.reduce((sum, entry) => sum + entry.duration, 0);
+
+            // Calculate unique log entries by title (simple unique count)
+            const uniqueTitles = new Set(state.filteredData.map(entry => entry.title));
+
+            state.summary = {
+                totalMinutes: totalMinutes,
+                totalHours: totalMinutes / 60,
+                uniqueLogs: uniqueTitles.size,
+                logCount: state.filteredData.length
+            };
+        }
+
+        // --- Data Processing ---
+
+        // Function to parse the raw rows using the current column map
+        function parseRawData(rows, columnMap) {
+            const parsed = [];
+            const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
+
+            if (!dateKey || !timeKey || !detailsKey || !durationKey) {
+                // Mapping is incomplete, cannot parse
+                return [];
+            }
+            
+            for (const row of rows) {
+                const dateRaw = row[dateKey];
+                const timeRaw = row[timeKey];
+                const detailsRaw = row[detailsKey];
+                const durationRaw = row[durationKey];
+
+                // REQUIRED: Skip row if DURATION is missing, as requested. Also skip if Date or Time is missing.
+                if (!dateRaw || !timeRaw || !durationRaw) {
+                    continue;
+                }
+
+                // COMBINE: Create the full timestamp string from separate columns
+                const fromRaw = `${dateRaw} ${timeRaw}`; 
+
+                const fromDate = parseFromField(fromRaw);
+                let durationValue = durationRaw; 
+
+                // Sanitize duration (in case it's string '5,0' or similar, handle numeric data)
+                if (typeof durationRaw === 'string') {
+                    durationValue = parseFloat(durationRaw.replace(',', '.'));
+                } else if (typeof durationRaw === 'number') {
+                    durationValue = durationRaw;
+                } else {
+                    durationValue = NaN;
+                }
+
+                // Skip if date is invalid or duration is invalid/zero
+                if (fromDate.isValid() && !isNaN(durationValue) && durationValue > 0) {
+                    
+                    // KEEP RAW DETAILS TEXT AS TITLE (Requested change)
+                    let title = String(detailsRaw || '').trim(); 
+                    if (title.length === 0) {
+                         title = 'No Details Provided';
+                    }
+
+                    parsed.push({
+                        from: fromDate.toDate(),
+                        title: title, // This now contains the raw, uncleaned string
+                        duration: durationValue, // In minutes
+                        rawFrom: fromRaw, // Store combined raw string for debugging
+                    });
+                } else {
+                    // Log to console if a row is skipped due to invalid date
+                    console.warn(`Skipping row due to invalid date/time/duration: Date="${dateRaw}", Time="${timeRaw}", Duration="${durationRaw}"`);
+                }
+            }
+            return parsed;
+        }
+
+        // Filter, summarize, and render
+        function applyFilters() {
+            const { allRows, columnMap, filters } = state;
+
+            // 1. Check mapping completeness
+            const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
+            const isMappingComplete = dateKey && timeKey && detailsKey && durationKey;
+            
+            if (!isMappingComplete || allRows.length === 0) {
+                state.rawData = [];
+                state.filteredData = [];
+                calculateSummary(); // Resets summary to zero
+                renderUI();
                 return;
             }
 
-            const taskData = generateTaskTimeData(filteredLogData);
-            const hourlyData = generateHourlyData(filteredLogData);
+            // 2. Parse data using the current column map
+            const parsedData = parseRawData(allRows, columnMap);
+            state.rawData = parsedData; 
 
-            if (currentTaskChart) currentTaskChart.destroy();
-            if (currentHourlyChart) currentHourlyChart.destroy();
+            // 3. Apply all filters
+            
+            // --- Time-of-Day Setup ---
+            const startStr = filters.excludeStart;
+            const endStr = filters.excludeEnd;
+            const includeWeekends = filters.includeWeekends;
+            const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+            const filtersActive = timeRegex.test(startStr) && timeRegex.test(endStr);
+            
+            const [startHour, startMinute] = startStr.split(':').map(Number);
+            const startMinutes = (startHour || 0) * 60 + (startMinute || 0);
+            
+            const [endHour, endMinute] = endStr.split(':').map(Number);
+            const endMinutes = (endHour || 0) * 60 + (endMinute || 0);
 
-            // --- 1. Task Distribution Chart (Doughnut) ---
-            const taskCtx = document.getElementById('taskDistributionChart').getContext('2d');
-            const taskColors = getChartColors(taskData.labels.length);
+            // --- Keyword Setup ---
+            // Split keywords by comma, trim whitespace, and convert to lower case
+            const keywordsToExclude = filters.excludeKeywords
+                .split(',')
+                .map(k => String(k).trim().toLowerCase())
+                .filter(k => k.length > 0);
 
-            taskContainer.classList.remove('hidden');
 
-            currentTaskChart = new Chart(taskCtx, {
-                type: 'doughnut',
-                data: {
-                    labels: taskData.labels,
-                    datasets: [{
-                        label: 'Time Spent (ms)',
-                        data: taskData.data,
-                        backgroundColor: taskColors,
-                        hoverOffset: 8,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: false,
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    const label = context.label || '';
-                                    const value = context.parsed || 0;
-                                    const percentage = (value / taskData.totalDuration * 100).toFixed(1);
-                                    return `${label}: ${formatDuration(value)} (${percentage}%)`;
-                                }
-                            }
-                        },
-                        title: {
-                            display: true,
-                            text: 'Top Task Time Breakdown',
-                            font: { size: 16 }
-                        }
-                    }
-                }
-            });
-
-            // Populate custom legend
-            const legendList = document.getElementById('taskLegendList');
-            legendList.innerHTML = '';
-            taskData.labels.forEach((label, index) => {
-                const duration = taskData.data[index];
-                const percentage = (duration / taskData.totalDuration * 100).toFixed(1);
-                const color = taskColors[index];
+            const filtered = parsedData.filter(entry => {
+                const entryTime = dayjs(entry.from);
                 
-                const listItem = document.createElement('li');
-                listItem.className = 'flex items-center space-x-2';
-                listItem.innerHTML = `
-                    <span class="w-3 h-3 rounded-full" style="background-color: ${color};"></span>
-                    <span class="font-semibold">${label}:</span>
-                    <span class="text-gray-700">${formatDuration(duration)}</span>
-                    <span class="text-sm text-gray-500">(${percentage}%)</span>
-                `;
-                legendList.appendChild(listItem);
-            });
+                // --- 3a. Keyword Exclusion Check ---
+                const entryTitle = entry.title.toLowerCase();
+                const isExcludedByKeyword = keywordsToExclude.some(keyword => entryTitle.includes(keyword));
 
-
-            // --- 2. Hourly Activity Chart (Bar) ---
-            const hourlyCtx = document.getElementById('hourlyActivityChart').getContext('2d');
-            hourlyContainer.classList.remove('hidden');
-
-            currentHourlyChart = new Chart(hourlyCtx, {
-                type: 'bar',
-                data: {
-                    labels: hourlyData.labels,
-                    datasets: [{
-                        label: 'Total Minutes Logged',
-                        data: hourlyData.data,
-                        backgroundColor: taskColors[0], // Use primary color
-                        borderColor: taskColors[0],
-                        borderWidth: 1,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        title: {
-                            display: true,
-                            text: 'Activity Distribution by Hour (Start Time)',
-                            font: { size: 16 }
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    const minutes = context.parsed.y || 0;
-                                    return `Minutes: ${minutes}`;
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Minutes'
-                            }
-                        },
-                        x: {
-                            title: {
-                                display: true,
-                                text: 'Hour of Day (0-23)'
-                            }
-                        }
-                    }
+                if (isExcludedByKeyword) {
+                    return false; // Exclude entry if any keyword is found
                 }
+
+
+                // --- 3b. Weekend Override Check ---
+                const isWeekend = entryTime.day() === 0 || entryTime.day() === 6;
+
+                if (includeWeekends && isWeekend) {
+                    return true; // Keep entry if it's a weekend, regardless of time filter
+                }
+                
+                // If time filters are not active, keep it (keyword check already passed).
+                if (!filtersActive) return true;
+
+                // --- 3c. Time-of-Day Exclusion Logic ---
+                
+                const entryMinutes = entryTime.hour() * 60 + entryTime.minute();
+
+                let isExcludedByTime = false;
+
+                if (startMinutes <= endMinutes) {
+                    // Normal range (e.g., 09:00 to 17:00)
+                    isExcludedByTime = entryMinutes >= startMinutes && entryMinutes <= endMinutes;
+                } else {
+                    // Range spans midnight (e.g., 23:00 to 06:00)
+                    isExcludedByTime = entryMinutes >= startMinutes || entryMinutes <= endMinutes;
+                }
+
+                if (isExcludedByTime) {
+                    return false; // Exclude
+                }
+
+                return true; // Keep
             });
 
-            reportModal.style.display = 'flex';
-        };
-        
-        /**
-         * Closes the chart report modal.
-         */
-        const closeReportModal = () => {
-            reportModal.style.display = 'none';
-        };
+            state.filteredData = filtered;
+            calculateSummary();
+            renderUI();
+        }
 
-        // --- Gemini API Insight Function (NEW) ---
 
-        /**
-         * Prepares data and calls the Gemini API for time allocation insight.
-         */
-        const generateInsight = async () => {
-            if (filteredLogData.length === 0) {
-                insightContent.innerHTML = '<p class="text-secondary font-medium">No filtered data available for analysis. Please upload a file and apply filters first.</p>';
-                insightCard.classList.remove('hidden');
+        // --- File Handling Helpers ---
+        function handleFileError(e) {
+            console.error("File processing error:", e);
+            state.error = `Error processing file: ${e.message}. Vennligst sjekk om filen er gyldig og at kolonneoverskriftene er lesbare.`;
+            state.rawData = [];
+            state.allRows = [];
+            state.headers = [];
+            state.isLoading = false;
+            renderUI();
+        }
+
+        function processWorkbook(workbook, file) {
+            try {
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+
+                // Convert to array of objects, keeping headers
+                const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                if (jsonRows.length < 1) {
+                    throw new Error("File is empty or could not be parsed.");
+                }
+
+                // Assuming the first row is the header
+                const headers = jsonRows[0].filter(h => h); // Filter out empty headers
+                state.headers = headers;
+
+                // Map data rows to objects using the headers
+                state.allRows = jsonRows.slice(1).map(row => {
+                    const obj = {};
+                    headers.forEach((header, i) => {
+                        obj[header] = row[i];
+                    });
+                    return obj;
+                });
+
+                // Guess initial column map
+                state.columnMap = {
+                    date: guessColumn(headers, ['date', 'dato']),
+                    time: guessColumn(headers, ['time', 'tid']),
+                    details: guessColumn(headers, ['details', 'tittel', 'program']),
+                    duration: guessColumn(headers, ['duration', 'varighet', 'minutter']),
+                };
+                
+                // Reset filters
+                state.filters.excludeStart = '00:00';
+                state.filters.excludeEnd = '00:00';
+                state.filters.excludeKeywords = ''; 
+
+                // Start the full processing (parsing and filtering)
+                applyFilters();
+
+            } catch (e) {
+                handleFileError(e);
+            } finally {
+                state.isLoading = false;
+                renderUI();
+            }
+        }
+
+        async function handleFileUpload(event) {
+            state.isLoading = true;
+            state.error = null;
+            state.headers = [];
+            state.rawData = [];
+            state.allRows = []; 
+            
+            const file = event.target.files[0];
+            if (!file) {
+                state.isLoading = false;
+                renderUI();
                 return;
             }
 
-            insightCard.classList.remove('hidden');
-            insightContent.innerHTML = '<div class="flex items-center space-x-2"><div class="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500"></div><p class="text-indigo-600">Generating insight, please wait...</p></div>';
-            insightButton.disabled = true;
+            const fileName = file.name;
+            state.fileTitle = fileName.substring(0, fileName.lastIndexOf('.')) || fileName;
+            
+            renderUI(); 
 
             try {
-                const taskData = generateTaskTimeData(filteredLogData);
-                const totalDuration = taskData.totalDuration;
-                const topTasks = taskData.topTasks;
+                let workbook;
+                const isCSV = file.name.toLowerCase().endsWith('.csv');
 
-                const topTasksString = topTasks.map(([name, duration]) => 
-                    `(${formatDuration(duration)}): ${name}`
-                ).join('; ');
+                if (isCSV) {
+                    // --- FIX FOR UTF-8 ENCODING IN CSV ---
+                    // Explicitly read CSV content as UTF-8 text using FileReader
+                    const textData = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => resolve(e.target.result);
+                        reader.onerror = (e) => reject(new Error("Failed to read CSV file."));
+                        reader.readAsText(file, 'UTF-8');
+                    });
+                    // Tell SheetJS to read the string data with the type 'string'
+                    workbook = XLSX.read(textData, { type: 'string' });
 
-                const systemPrompt = `You are an objective Time Management Analyst. Your role is to analyze a user's filtered activity log (tasks performed outside of regular working hours) and provide a concise, single-paragraph summary of the key findings, including the total time spent and the nature of the activities. Then, provide 3 short, insightful bullet points with potential implications or suggestions for time management and work-life balance. Format the entire response in clean Markdown.`;
-                
-                const userQuery = `Analyze the following summary of filtered activities and provide insights. The data represents activities recorded outside of the user's normal working hours.
-                Total After-Hours/Filtered Duration: ${formatDuration(totalDuration)}.
-                Top activities by duration are: ${topTasksString}.`;
-
-                const payload = {
-                    contents: [{ parts: [{ text: userQuery }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                };
-
-                let response, result;
-                let attempt = 0;
-                const maxRetries = 3;
-
-                while (attempt < maxRetries) {
-                    try {
-                        response = await fetch(API_URL, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
-
-                        if (response.ok) {
-                            result = await response.json();
-                            break; // Exit loop on success
-                        } else if (response.status === 429 && attempt < maxRetries - 1) {
-                            // Too many requests (Rate Limit) - implement exponential backoff
-                            const delay = Math.pow(2, attempt) * 1000;
-                            await new Promise(resolve => setTimeout(resolve, delay));
-                            attempt++;
-                        } else {
-                            throw new Error(`API returned status ${response.status}: ${response.statusText}`);
-                        }
-                    } catch (e) {
-                        if (attempt === maxRetries - 1) throw e;
-                        attempt++;
-                    }
-                }
-
-                const generatedText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-                if (generatedText) {
-                    // Convert markdown to basic HTML for better display within the card
-                    const htmlContent = generatedText
-                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
-                        .replace(/\n\n/g, '<br><br>') // Paragraphs
-                        .replace(/^- /gm, '<li><span class="font-semibold text-primary/80">&bull;</span> ') // List items
-                        .replace(/\n\s*\n/g, '<br><br>') // Handle extra newlines
-                        .replace(/^(\* )/gm, '<li><span class="font-semibold text-primary/80">&bull;</span> ') // Handle different list formats
-                        .replace(/^(<li>.*)$/gm, '<ul class="list-disc ml-4 space-y-2">$1</ul>'); // Wrap list items
-
-                    insightContent.innerHTML = `<div class="prose max-w-none text-gray-700">${htmlContent}</div>`;
                 } else {
-                    insightContent.innerHTML = '<p class="text-red-500 font-medium">Failed to generate insight. Received an empty response from the AI model.</p>';
+                    // For XLSX, use arrayBuffer (standard, less prone to text encoding issues)
+                    const arrayBufferData = await file.arrayBuffer();
+                    workbook = XLSX.read(arrayBufferData, { type: 'array' });
                 }
+                
+                // Continue with the standard processing flow
+                processWorkbook(workbook, file);
 
-            } catch (error) {
-                console.error("Gemini API Error:", error);
-                insightContent.innerHTML = `<p class="text-red-500 font-medium">An error occurred while generating insight: ${error.message}.</p>`;
-            } finally {
-                insightButton.disabled = false;
+            } catch (e) {
+                handleFileError(e);
             }
-        };
+        }
 
 
-        // --- Event Listeners and Initialization ---
+        // --- Event Handlers ---
 
-        // File Input Handler (Upload)
-        fileInput.addEventListener('change', function (e) {
-            rawLogData = [];
-            analyzeButton.disabled = true;
-            reportButton.disabled = true;
-            insightButton.disabled = true;
-            fileStatus.textContent = 'Processing file...';
-            clearError();
+        function handleColumnMapChange(event) {
+            const { name, value } = event.target;
+            state.columnMap[name] = value;
+            applyFilters();
+        }
 
-            const file = e.target.files[0];
-            if (!file) {
-                fileStatus.textContent = 'Awaiting file upload...';
+        function handleFilterChange(event) {
+            const { name, value, type, checked } = event.target;
+
+            if (type === 'checkbox') {
+                state.filters[name] = checked;
+            } else {
+                state.filters[name] = value;
+            }
+
+            applyFilters();
+        }
+
+        function exportCSV() {
+            if (state.filteredData.length === 0) {
+                state.error = "No data to export. Please load a file and apply filters.";
+                renderUI();
                 return;
             }
+            state.error = null;
 
-            const reader = new FileReader();
+            const headers = ["Fra (Formatted)", "Rå Fra (Raw From)", "Detaljer (Raw Title)", "Varighet (Duration Minutes)"];
+            const csvRows = [headers.join(',')];
 
-            reader.onload = function(event) {
-                try {
-                    const data = new Uint8Array(event.target.result);
-                    const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-                    const firstSheetName = workbook.SheetNames[0];
-                    const worksheet = workbook.Sheets[firstSheetName];
-                    
-                    rawLogData = XLSX.utils.sheet_to_json(worksheet);
-
-                    if (rawLogData.length > 0) {
-                        fileStatus.textContent = `File loaded successfully! ${rawLogData.length} entries found.`;
-                        analyzeButton.disabled = false;
-                        processLogs();
-                    } else {
-                        fileStatus.textContent = 'File loaded, but no usable data rows found.';
-                    }
-                } catch (error) {
-                    console.error("File processing error:", error);
-                    displayError(`Failed to read the file. Please ensure it is a valid CSV or XLSX format. Error: ${error.message}`);
-                }
-            };
-
-            reader.onerror = (error) => {
-                console.error("FileReader error:", error);
-                displayError("An error occurred while reading the file from your disk.");
-            };
-
-            reader.readAsArrayBuffer(file);
-        });
-
-        // Analyze Button and Filter Change Handler
-        analyzeButton.addEventListener('click', processLogs);
-        reportButton.addEventListener('click', generateReport);
-        insightButton.addEventListener('click', generateInsight); // NEW
-
-        // Add listeners to all filter inputs to re-analyze when filters change
-        startHourInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
-        startMinuteInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
-        endHourInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
-        endMinuteInput.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
-        includeWeekendsCheckbox.addEventListener('change', () => analyzeButton.disabled === false && processLogs());
-        exclusionListInput.addEventListener('input', () => analyzeButton.disabled === false && processLogs());
-
-        // Initial render for empty state
-        renderResults([], 0);
-
-        // Allow closing modal by clicking the backdrop
-        reportModal.addEventListener('click', function(e) {
-            if (e.target === reportModal) {
-                closeReportModal();
+            for (const entry of state.filteredData) {
+                const fromStr = dayjs(entry.from).format('YYYY-MM-DD HH:mm:ss');
+                const row = [
+                    `"${fromStr}"`,
+                    `"${entry.rawFrom.replace(/"/g, '""')}"`, 
+                    `"${entry.title.replace(/"/g, '""')}"`, // Use raw title
+                    entry.duration
+                ].join(',');
+                csvRows.push(row);
             }
-        });
+
+            // Using BOM for CSV ensures correct UTF-8 display in Excel/Google Sheets
+            const BOM = "\uFEFF";
+            const csvString = BOM + csvRows.join('\n');
+            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `filtered_${state.fileTitle || state.appBaseName}.csv`; 
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            alert("Export complete! You can open this CSV file directly in Google Sheets by choosing 'File' > 'Import' from within Google Sheets.");
+        }
+
+        // --- UI Rendering ---
+
+        function renderUI() {
+            const root = document.getElementById('app-root');
+
+            const isReadyToAnalyze = state.rawData.length > 0;
+            const isMappingVisible = state.headers.length > 0;
+            const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+
+            root.innerHTML = `
+                <div class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+                    <h1 class="text-4xl font-extrabold text-gray-900 mb-6 text-primary-color">
+                        ${state.appBaseName}
+                        ${state.fileTitle ? `<span class="text-2xl font-semibold text-gray-500"> — Fil: ${state.fileTitle}</span>` : ''}
+                    </h1>
+
+                    <!-- 1. File Upload & Error Display -->
+                    <div class="bento-card rounded-xl p-6 mb-8">
+                        <h2 class="text-xl font-semibold mb-4 text-primary-color">1. Last Opp Fil (Upload File)</h2>
+                        <input type="file" id="fileInput"
+                               class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2"
+                               accept=".csv, .xlsx">
+                        ${state.isLoading ? `
+                            <p class="mt-4 text-center text-primary-color font-medium">Laster inn og analyserer data...</p>
+                        ` : ''}
+                        ${state.error ? `
+                            <div class="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg" role="alert">
+                                <p class="font-bold">Feil (Error)</p>
+                                <p>${state.error}</p>
+                                <p class="text-sm">Forsøk å laste opp filen på nytt. Hvis det er en CSV, er det nå implementert en spesiell fiks for tegnsettet (UTF-8).</p>
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <!-- 1.b Column Mapping Section -->
+                    ${isMappingVisible ? `
+                        <div class="bento-card rounded-xl p-6 mb-8 border-yellow-300 bg-yellow-50">
+                            <h2 class="text-xl font-semibold mb-4 text-primary-color">1.b Kolonne Kartlegging (Column Mapping)</h2>
+                            <p class="text-sm text-gray-700 mb-4">Vennligst bekreft hvilke kolonner som inneholder nødvendig informasjon fra filen din. (Please confirm which columns contain the necessary information from your file.)</p>
+                            
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                ${['date', 'time', 'details', 'duration'].map(key => `
+                                    <div>
+                                        <label for="map-${key}" class="block text-sm font-medium text-gray-700 capitalize">
+                                            ${key === 'date' ? 'Dato (Date)' : key === 'time' ? 'Tid (Time)' : key === 'details' ? 'Detaljer (Details)' : 'Varighet (Duration Min.)'}
+                                        </label>
+                                        <select id="map-${key}" name="${key}"
+                                                onchange="handleColumnMapChange(event)"
+                                                class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
+                                            <option value="" ${!state.columnMap[key] ? 'selected' : ''} disabled>Velg Kolonne...</option>
+                                            ${state.headers.map(header => `
+                                                <option value="${header}" ${state.columnMap[key] === header ? 'selected' : ''}>
+                                                    ${header}
+                                                </option>
+                                            `).join('')}
+                                        </select>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            ${!isMappingComplete ? `
+                                <p class="mt-4 p-2 bg-yellow-200 text-yellow-800 rounded-lg font-medium">Alle fire kolonner må velges for å starte analysen.</p>
+                            ` : ''}
+                        </div>
+                    ` : ''}
+
+                    <!-- Conditional Analysis Sections (2 & 3) -->
+                    ${isReadyToAnalyze ? `
+                        <!-- 2. Summary & Controls Grid -->
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                            
+                            <!-- Filter Controls -->
+                            <div class="lg:col-span-2 bento-card rounded-xl p-6">
+                                <h2 class="text-xl font-semibold mb-4 text-primary-color">
+                                    2. Filtrering (Filtering)
+                                </h2>
+                                
+                                <div class="mb-6 border-b pb-4 border-gray-100">
+                                    <h3 class="text-lg font-medium text-gray-800 mb-2">Ekskluder etter Tid (Time Exclusion)</h3>
+                                    <p class="text-sm text-gray-500 mb-4">Ekskluderer loggoppføringer der tidspunktet faller innenfor tidsperioden nedenfor. (Excludes entries where the time of day falls within the period below.)</p>
+
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                                        <div>
+                                            <label for="excludeStart" class="block text-sm font-medium text-gray-700">Ekskluder Fra Tid (Exclude From Time) - HH:MM</label>
+                                            <input type="time" id="excludeStart" name="excludeStart"
+                                                   value="${state.filters.excludeStart}"
+                                                   onchange="handleFilterChange(event)"
+                                                   class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
+                                        </div>
+                                        <div>
+                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-700">Ekskluder Til Tid (Exclude To Time) - HH:MM</label>
+                                            <input type="time" id="excludeEnd" name="excludeEnd"
+                                                   value="${state.filters.excludeEnd}"
+                                                   onchange="handleFilterChange(event)"
+                                                   class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center">
+                                        <input id="includeWeekends" name="includeWeekends" type="checkbox"
+                                               ${state.filters.includeWeekends ? 'checked' : ''}
+                                               onchange="handleFilterChange(event)"
+                                               class="h-4 w-4 text-primary-color border-gray-300 rounded focus:ring-primary-color">
+                                        <label for="includeWeekends" class="ml-2 block text-sm font-medium text-gray-700">
+                                            Inkluder helger (Lørdag og Søndag) uavhengig av tidsfilter.
+                                            <span class="text-gray-500 text-xs">(Include weekends regardless of time filter.)</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <!-- Keyword Exclusion -->
+                                <div>
+                                    <h3 class="text-lg font-medium text-gray-800 mb-2">Ekskluder etter Nøkkelord (Keyword Exclusion)</h3>
+                                    <p class="text-sm text-gray-500 mb-2">Ekskluder rader hvor 'Detaljer'-feltet inneholder disse ordene/frasene. Skill med komma. (Exclude rows where 'Details' contains these words/phrases. Separate with commas.)</p>
+                                    <input type="text" id="excludeKeywords" name="excludeKeywords"
+                                           placeholder="F.eks: Slack, Google Meet, Lunsj"
+                                           value="${state.filters.excludeKeywords}"
+                                           oninput="handleFilterChange(event)"
+                                           class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
+                                </div>
+                            </div>
+
+                            <!-- Summary (Bento Grid Style) -->
+                            <div class="lg:col-span-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-6">
+                                <div class="bento-card rounded-xl p-6 bg-primary-color text-white">
+                                    <h3 class="text-lg font-bold mb-1 opacity-90">Total Varighet (Filtered)</h3>
+                                    <p class="text-4xl font-extrabold">${formatDuration(state.summary.totalMinutes)}</p>
+                                    <p class="text-sm opacity-80">${state.summary.totalMinutes.toFixed(0)} minutter totalt</p>
+                                </div>
+                                <div class="bento-card rounded-xl p-6">
+                                    <h3 class="text-lg font-bold mb-1 text-primary-color">Loggoppføringer</h3>
+                                    <p class="text-4xl font-extrabold text-secondary">${state.summary.logCount}</p>
+                                    <p class="text-sm text-gray-500">Filtrerte rader / Total: ${state.rawData.length}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. Filtered Results Table -->
+                        <div class="bento-card rounded-xl p-6 mb-8">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-semibold text-primary-color">3. Filtrerte Resultater (Filtered Results)</h2>
+                                <button onclick="exportCSV()"
+                                        class="px-4 py-2 bg-secondary text-white font-bold rounded-lg shadow-md hover:bg-yellow-600 transition duration-150 disabled:opacity-50"
+                                        ${state.filteredData.length === 0 ? 'disabled' : ''}>
+                                    Eksporter CSV
+                                </button>
+                            </div>
+                            
+                            <div id="logEntriesContainer" class="w-full">
+                                <table class="min-w-full divide-y divide-gray-200">
+                                    <thead class="bg-gray-50 sticky top-0">
+                                        <tr>
+                                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">Fra (Formatted)</th>
+                                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">Rå Fra (Raw From)</th>
+                                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/2">Tittel / Detaljer (Rådata)</th>
+                                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-1/12">Varighet (m)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="bg-white divide-y divide-gray-200 text-sm">
+                                        ${state.filteredData.length > 0 ? state.filteredData.map(entry => `
+                                            <tr class="${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'bg-indigo-50/70' : ''}">
+                                                <td class="px-3 py-3 whitespace-nowrap font-medium text-gray-900">${formatDateTime(entry.from)}</td>
+                                                <td class="px-3 py-3 whitespace-nowrap text-xs text-gray-500 font-mono">${entry.rawFrom}</td>
+                                                <td class="px-3 py-3 text-gray-800 log-table-details">${entry.title}</td>
+                                                <td class="px-3 py-3 whitespace-nowrap text-right font-mono text-gray-700">${entry.duration.toFixed(0)}</td>
+                                            </tr>
+                                        `).join('') : `
+                                            <tr>
+                                                <td colspan="4" class="px-6 py-4 text-center text-gray-500 italic">
+                                                    Ingen loggoppføringer matcher gjeldende filterinnstillinger.
+                                                </td>
+                                            </tr>
+                                        `}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    ` : isMappingVisible ? `
+                        <!-- Mapping is visible but incomplete -->
+                        <div class="bento-card rounded-xl p-6 mb-8 text-center text-gray-500">
+                             <p class="text-lg">Fullfør kolonne-kartleggingen ovenfor for å se analyseresultatene.</p>
+                        </div>
+                    ` : `
+                        <!-- Placeholder when no data is loaded -->
+                         <div class="bento-card rounded-xl p-6 mb-8 text-center text-gray-500">
+                             <p class="text-lg">Last opp en fil for å starte analysen.</p>
+                        </div>
+                    `}
+                </div>
+            `;
+
+            // Re-attach event listeners
+            document.getElementById('fileInput')?.addEventListener('change', handleFileUpload);
+            document.getElementById('map-date')?.addEventListener('change', handleColumnMapChange);
+            document.getElementById('map-time')?.addEventListener('change', handleColumnMapChange);
+            document.getElementById('map-details')?.addEventListener('change', handleColumnMapChange);
+            document.getElementById('map-duration')?.addEventListener('change', handleColumnMapChange);
+            document.getElementById('excludeStart')?.addEventListener('change', handleFilterChange);
+            document.getElementById('excludeEnd')?.addEventListener('change', handleFilterChange);
+            document.getElementById('includeWeekends')?.addEventListener('change', handleFilterChange);
+            document.getElementById('excludeKeywords')?.addEventListener('input', handleFilterChange);
+        }
+
+        // Initialize the application when the window loads
+        window.onload = () => {
+            renderUI();
+        };
+
+        // Polyfill/Shim for older browser alert replacement (important for compatibility)
+        function alert(message) {
+            const container = document.getElementById('app-root');
+            let modal = document.getElementById('customAlert');
+
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'customAlert';
+                modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300';
+                modal.innerHTML = `
+                    <div class="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full transform transition-all duration-300 scale-95 opacity-0">
+                        <h3 class="text-xl font-bold mb-3 text-primary-color">Vellykket (Success)</h3>
+                        <p id="alertMessage" class="mb-4 text-gray-700"></p>
+                        <button onclick="document.getElementById('customAlert').classList.add('opacity-0', 'scale-95'); setTimeout(() => document.getElementById('customAlert').style.display = 'none', 300);"
+                                class="w-full px-4 py-2 bg-primary-color text-white font-bold rounded-lg hover:bg-teal-700 transition duration-150">
+                            OK
+                        </button>
+                    </div>
+                `;
+                container.appendChild(modal);
+            }
+
+            document.getElementById('alertMessage').textContent = message;
+            modal.style.display = 'flex';
+            // Trigger transition
+            setTimeout(() => modal.classList.remove('opacity-0', 'scale-95'), 10);
+        }
 
     </script>
+</head>
+<body id="app-root">
+    <!-- The JavaScript will render the full UI here -->
 </body>
 </html>
