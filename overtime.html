@@ -10,6 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/isBetween.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/customParseFormat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/utc.js"></script> <!-- ADDED UTC PLUGIN -->
     <!-- SheetJS/xlsx for file parsing -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
@@ -55,13 +56,13 @@
             background-color: rgb(var(--primary));
         }
         /* Style adjustments for modern dark mode inputs */
-        input[type="file"], input[type="text"], input[type="time"], select {
+        input[type="file"], input[type="text"], input[type="time"], input[type="number"], select {
             background-color: rgb(25 35 49); /* Slightly darker than card for contrast */
             border-color: rgb(47 62 82); /* Slate 700 */
             color: white;
             transition: border-color 0.15s;
         }
-        input[type="text"]:focus, input[type="time"]:focus, select:focus {
+        input[type="text"]:focus, input[type="time"]:focus, input[type="number"]:focus, select:focus {
             border-color: rgb(var(--primary));
             box-shadow: 0 0 0 1px rgb(var(--primary));
         }
@@ -71,8 +72,20 @@
         }
     </style>
     <script>
+        // CRITICAL FIX: Load UTC plugin and safely check for all plugins to prevent internal Day.js crashes.
+        if (window.dayjs_plugin_is_between) {
+            dayjs.extend(window.dayjs_plugin_is_between);
+        }
+        if (window.dayjs_plugin_custom_parse_format) {
+            dayjs.extend(window.dayjs_plugin_custom_parse_format);
+        }
+        if (window.dayjs_plugin_utc) {
+            dayjs.extend(window.dayjs_plugin_utc); // Extend UTC plugin
+        }
+
+
         // --- Gemini API Constants ---
-        const API_KEY = ""; // FIX: Ensuring API_KEY is empty for environment compatibility
+        const API_KEY = ""; // Ensuring API_KEY is empty for environment compatibility
         const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
         const MAX_RETRIES = 5;
         const IS_API_KEY_PROVIDED = API_KEY && API_KEY.length > 0;
@@ -91,16 +104,18 @@
             },
             headers: [], 
             columnMap: { 
-                date: '', 
-                time: '',
+                // Simplified structure, only essential fields remain:
+                unix: '', // Primary time source
                 details: '',
                 duration: ''
             },
             filters: {
-                excludeStart: '09:00', // Default start time for office hours
-                excludeEnd: '17:00',   // Default end time for office hours
+                excludeStart: '08:00', 
+                excludeEnd: '16:00',   
                 includeWeekends: false,
-                excludeKeywords: '' 
+                excludeKeywords: '',
+                // NEW: Timezone offset in hours relative to GMT. Default +2 for CEST.
+                timezoneOffsetHours: 2 
             },
             tempExcludeKeywords: '', 
             isLoading: false,
@@ -125,6 +140,7 @@
         }
 
         function formatDateTime(dateTime) {
+            // NOTE: This format output uses the browser's local timezone (correctly now).
             return dayjs(dateTime).format('ddd, D/MMM HH:mm');
         }
         
@@ -133,19 +149,6 @@
             return dayjs(dateTime).format('ddd');
         }
 
-        function parseFromField(dateString) {
-            const formats = [
-                // Added ISO-like format common in logs
-                'YYYY-MM-DD HH:mm', 'YYYY-M-D H:mm',
-                // Existing formats
-                'M/D/YYYY H:mm', 'M/D/YYYY HH:mm', 
-                'D/M/YYYY H:mm', 'D/M/YYYY HH:mm', 
-                'M.D.YYYY H:mm', 
-            ];
-            // CRITICAL: Using strict parsing (true)
-            return dayjs(dateString, formats, true);
-        }
-        
         function guessColumn(headers, keywords) {
             for (const keyword of keywords) {
                 // Ensure keyword comparison is case-insensitive
@@ -167,18 +170,15 @@
             };
         }
         
-        // NEW: Checks which required fields are missing from the mapping
+        // Checks which required fields are missing from the mapping (only 3 fields now)
         function getMissingMappings() {
-            const requiredKeys = [
-                { key: 'date', name: 'Date' },
-                { key: 'time', name: 'Time' },
-                { key: 'details', name: 'Details/Title' },
-                { key: 'duration', name: 'Duration (Min.)' }
-            ];
+            const required = [];
+
+            if (!state.columnMap.unix) required.push('Timestamp (Unix/Epoch)');
+            if (!state.columnMap.details) required.push('Details/Title');
+            if (!state.columnMap.duration) required.push('Duration (Min.)');
             
-            return requiredKeys
-                .filter(item => !state.columnMap[item.key])
-                .map(item => item.name);
+            return required;
         }
 
         // --- LLM API Functions (Omitted for brevity, assumed correct) ---
@@ -251,7 +251,8 @@
         }
         
         async function handleSummarizeActivities() {
-            const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+            const isMappingComplete = state.columnMap.unix && state.columnMap.details && state.columnMap.duration;
+
 
             if (state.filteredData.length === 0 || !isMappingComplete) {
                 state.aiError = "Filter and analyze data (Step 3) first before generating AI insights.";
@@ -303,7 +304,7 @@
         }
 
         async function handleDraftReport() {
-            const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+            const isMappingComplete = state.columnMap.unix && state.columnMap.details && state.columnMap.duration;
             
             if (state.filteredData.length === 0 || !isMappingComplete) {
                 state.aiError = "Filter and analyze data (Step 3) first before generating AI insights.";
@@ -358,25 +359,60 @@
 
         function parseRawData(rows, columnMap) {
             const parsed = [];
-            const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
+            // Only use the new simplified fields
+            const { unix: unixKey, details: detailsKey, duration: durationKey } = columnMap; 
+            
+            // Get timezone offset from filters. Default to 0 if invalid or missing.
+            let offsetHours = parseInt(state.filters.timezoneOffsetHours);
+            if (isNaN(offsetHours)) {
+                offsetHours = 0;
+            }
 
-            if (!dateKey || !timeKey || !detailsKey || !durationKey) {
+            // Only proceed if all 3 simplified mandatory fields are mapped
+            if (!unixKey || !detailsKey || !durationKey) {
                 return [];
             }
             
             for (const row of rows) {
-                const dateRaw = row[dateKey];
-                const timeRaw = row[timeKey];
+                let fromRaw;
+                let fromDateDayjs;
+                
+                const unixValue = row[unixKey];
                 const detailsRaw = row[detailsKey];
                 const durationRaw = row[durationKey];
 
-                // Skip if any mandatory raw fields are null/empty. CRITICAL: detailsRaw and durationRaw must be present.
-                if (!dateRaw || !timeRaw || detailsRaw === undefined || detailsRaw === null || durationRaw === undefined || durationRaw === null) {
+                // 1. Unix Parsing (Guaranteed Time Source)
+                if (unixValue) {
+                    const numUnixValue = Number(unixValue);
+                    
+                    if (!isNaN(numUnixValue) && numUnixValue > 1000000000) { // Check if it's a valid timestamp (seconds or milliseconds)
+                        // Heuristic: If timestamp is very large (e.g., > 16 digits), assume milliseconds and divide by 1000.
+                        const isMilliseconds = numUnixValue > 9999999999999;
+                        const finalUnixValue = isMilliseconds ? numUnixValue / 1000 : numUnixValue;
+                        
+                        // Step 1: Explicitly parse as Unix (seconds) in UTC (GMT+0)
+                        fromDateDayjs = dayjs.unix(finalUnixValue).utc();
+
+                        // Step 2: Apply the subtraction of the source timezone offset to get back to true GMT/UTC.
+                        // If source timezone is GMT+2, we subtract 2 hours to get true UTC (GMT).
+                        if (offsetHours !== 0) {
+                            fromDateDayjs = fromDateDayjs.subtract(offsetHours, 'hour');
+                        }
+
+                        fromRaw = `UNIX: ${unixValue}`;
+                    } else {
+                        // Not a valid number or too small to be a modern timestamp
+                        continue; 
+                    }
+                } else {
+                    continue; // Skip if no unix value is present
+                }
+                
+                // Skip if mandatory details/duration are missing/empty
+                if (detailsRaw === undefined || detailsRaw === null || durationRaw === undefined || durationRaw === null) {
                     continue; 
                 }
 
-                const fromRaw = `${dateRaw} ${timeRaw}`; 
-                const fromDate = parseFromField(fromRaw);
                 let durationValue = durationRaw; 
 
                 if (typeof durationRaw === 'string') {
@@ -386,7 +422,7 @@
                     durationValue = NaN;
                 }
 
-                if (fromDate.isValid() && !isNaN(durationValue) && durationValue > 0) {
+                if (fromDateDayjs.isValid() && !isNaN(durationValue) && durationValue > 0) {
                     
                     let title = String(detailsRaw || '').trim(); 
                     if (title.length === 0) {
@@ -394,13 +430,14 @@
                     }
 
                     parsed.push({
-                        from: fromDate.toDate(),
+                        // Convert Day.js object to standard JS Date object for storage (this converts corrected UTC time to local time for display)
+                        from: fromDateDayjs.toDate(),
                         title: title, 
                         duration: durationValue, 
                         rawFrom: fromRaw, 
                     });
                 } else {
-                    console.warn(`Skipping row due to invalid date/time/duration: Date="${dateRaw}", Time="${timeRaw}", Duration="${durationRaw}"`);
+                    console.warn(`Skipping row due to invalid data: Raw From="${fromRaw}", Duration="${durationRaw}", Details="${detailsRaw}"`);
                 }
             }
             return parsed;
@@ -409,11 +446,10 @@
         function applyFilters() {
             const { allRows, columnMap, filters } = state;
 
-            const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
-            const isMappingComplete = dateKey && timeKey && detailsKey && durationKey;
+            // Simplified mapping check
+            const isMappingComplete = columnMap.unix && columnMap.details && columnMap.duration;
             
             if (allRows.length === 0) {
-                // No data loaded, nothing to do.
                 state.rawData = [];
                 state.filteredData = [];
                 calculateSummary(); 
@@ -534,18 +570,17 @@
                 });
 
                 // Set intelligent defaults for the mapping based on common keywords
-                // The auto-detection logic is crucial here for a smooth start.
                 state.columnMap = {
-                    date: guessColumn(headers, ['date', 'dato', 'start date']),
-                    time: guessColumn(headers, ['time', 'tid', 'start time']),
+                    unix: guessColumn(headers, ['unix', 'epoch', 'timestamp']), // PRIMARY
                     details: guessColumn(headers, ['details', 'tittel', 'program', 'activity', 'title']),
                     duration: guessColumn(headers, ['duration', 'varighet', 'minutter', 'mins']),
                 };
                 
                 // Reset filters to defaults on new file load
-                state.filters.excludeStart = '09:00';
-                state.filters.excludeEnd = '17:00';
+                state.filters.excludeStart = '08:00'; 
+                state.filters.excludeEnd = '16:00';   
                 state.filters.excludeKeywords = ''; 
+                state.filters.timezoneOffsetHours = 2; // Default to +2 (CEST) adjustment
                 state.tempExcludeKeywords = ''; 
                 state.aiError = !API_KEY && typeof __api_key === 'undefined' ? "Gemini API key is required for LLM features. If you are in a supported environment, leave the API_KEY empty." : null;
 
@@ -636,6 +671,9 @@
 
             if (type === 'checkbox') {
                 state.filters[name] = checked;
+            } else if (name === 'timezoneOffsetHours') {
+                 // Ensure the value is treated as a number, but store the string value for input persistence
+                state.filters[name] = value;
             } else {
                 state.filters[name] = value;
             }
@@ -692,7 +730,7 @@
 
             const isDataLoaded = state.allRows.length > 0; // Check if the file was loaded successfully
             const isMappingVisible = state.headers.length > 0;
-            const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+            const isMappingComplete = state.columnMap.unix && state.columnMap.details && state.columnMap.duration;
             const missingMappings = getMissingMappings(); // Get list of missing fields
 
             // Only consider data ready to analyze if mapping is complete AND we have successfully parsed some rows
@@ -736,26 +774,55 @@
                     ${isMappingVisible ? `
                         <div class="bento-card p-6 mb-8 border-yellow-700 bg-slate-800">
                             <h2 class="text-2xl font-semibold mb-4 text-yellow-300 border-b border-yellow-700/50 pb-3">1.b Column Mapping (Auto-Detected)</h2>
-                            <p class="text-sm text-gray-300 mb-6">Confirm or adjust which columns contain the **Date**, **Time**, **Details**, and **Duration** (in minutes) data.</p>
+                            <p class="text-sm text-gray-300 mb-6">Select the **Unix Timestamp**, **Details**, and **Duration** columns from your file.</p>
                             
-                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                                ${['date', 'time', 'details', 'duration'].map(key => `
-                                    <div>
-                                        <label for="map-${key}" class="block text-sm font-medium text-gray-300 capitalize mb-1">
-                                            ${key === 'date' ? 'Date' : key === 'time' ? 'Time' : key === 'details' ? 'Details/Title' : 'Duration (Min.)'}
-                                        </label>
-                                        <select id="map-${key}" name="${key}"
-                                                onchange="handleColumnMapChange(event)"
-                                                class="w-full rounded-lg shadow-inner p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white focus:border-primary-color focus:ring-primary-color">
-                                            <option value="" ${!state.columnMap[key] ? 'selected' : ''} disabled>Select Column...</option>
-                                            ${state.headers.map(header => `
-                                                <option value="${header}" ${state.columnMap[key] === header ? 'selected' : ''}>
-                                                    ${header}
-                                                </option>
-                                            `).join('')}
-                                        </select>
-                                    </div>
-                                `).join('')}
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                            
+                                <!-- Unix Timestamp -->
+                                <div>
+                                    <label for="map-unix" class="block text-sm font-medium text-gray-300 mb-1">Timestamp (Unix/Epoch)</label>
+                                    <select id="map-unix" name="unix"
+                                            onchange="handleColumnMapChange(event)"
+                                            class="w-full rounded-lg shadow-inner p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white focus:border-primary-color focus:ring-primary-color">
+                                        <option value="" ${!state.columnMap.unix ? 'selected' : ''} disabled>Select Timestamp Column...</option>
+                                        ${state.headers.map(header => `
+                                            <option value="${header}" ${state.columnMap.unix === header ? 'selected' : ''}>
+                                                ${header}
+                                            </option>
+                                        `).join('')}
+                                    </select>
+                                </div>
+                                
+                                <!-- Details/Title -->
+                                <div>
+                                    <label for="map-details" class="block text-sm font-medium text-gray-300 mb-1">Details/Title</label>
+                                    <select id="map-details" name="details"
+                                            onchange="handleColumnMapChange(event)"
+                                            class="w-full rounded-lg shadow-inner p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white focus:border-primary-color focus:ring-primary-color">
+                                        <option value="" ${!state.columnMap.details ? 'selected' : ''} disabled>Select Details Column...</option>
+                                        ${state.headers.map(header => `
+                                            <option value="${header}" ${state.columnMap.details === header ? 'selected' : ''}>
+                                                ${header}
+                                            </option>
+                                        `).join('')}
+                                    </select>
+                                </div>
+
+                                <!-- Duration -->
+                                <div>
+                                    <label for="map-duration" class="block text-sm font-medium text-gray-300 mb-1">Duration (Min.)</label>
+                                    <select id="map-duration" name="duration"
+                                            onchange="handleColumnMapChange(event)"
+                                            class="w-full rounded-lg shadow-inner p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white focus:border-primary-color focus:ring-primary-color">
+                                        <option value="" ${!state.columnMap.duration ? 'selected' : ''} disabled>Select Duration Column...</option>
+                                        ${state.headers.map(header => `
+                                            <option value="${header}" ${state.columnMap.duration === header ? 'selected' : ''}>
+                                                ${header}
+                                            </option>
+                                        `).join('')}
+                                    </select>
+                                </div>
+
                             </div>
 
                             <!-- Validation and Status Messages -->
@@ -766,7 +833,7 @@
                                 </p>
                             ` : isDataLoaded && state.rawData.length === 0 ? `
                                 <p class="mt-6 p-3 bg-yellow-900/50 text-yellow-300 rounded-xl font-medium text-sm border border-yellow-700">
-                                    Mapping is complete, but <strong>no valid entries were found</strong> after attempting to parse the date, time, duration, and ensuring all fields are present. Check your raw data for formatting issues (e.g., non-numeric durations or bad date/time formats).
+                                    Mapping is complete, but <strong>no valid entries were found</strong> after attempting to parse. Check your raw data for formatting issues (e.g., non-numeric durations or bad date/time/unix formats).
                                 </p>
                             ` : ''}
                         </div>
@@ -787,31 +854,44 @@
                                     <h3 class="text-xl font-medium text-gray-100 mb-3">Time Exclusion (Daily)</h3>
                                     <p class="text-sm text-gray-400 mb-4">Exclude logs that fall between (or inside) the designated working hours. This isolates **off-hours** activity.</p>
 
-                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
                                         <div>
-                                            <label for="excludeStart" class="block text-sm font-medium text-gray-300 mb-1">Exclude From Time (E.g., 09:00)</label>
+                                            <label for="excludeStart" class="block text-sm font-medium text-gray-300 mb-1">Exclude From Time (E.g., 08:00)</label>
                                             <input type="time" id="excludeStart" name="excludeStart"
                                                     value="${state.filters.excludeStart}"
                                                     onchange="handleFilterChange(event)"
                                                     class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
                                         </div>
                                         <div>
-                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-300 mb-1">Exclude To Time (E.g., 17:00)</label>
+                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-300 mb-1">Exclude To Time (E.g., 16:00)</label>
                                             <input type="time" id="excludeEnd" name="excludeEnd"
                                                     value="${state.filters.excludeEnd}"
                                                     onchange="handleFilterChange(event)"
                                                     class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
                                         </div>
+                                        
+                                        <!-- NEW Timezone Offset Control -->
+                                        <div>
+                                            <label for="timezoneOffsetHours" class="block text-sm font-medium text-gray-300 mb-1">Source Timezone Offset (Hours)</label>
+                                            <input type="number" id="timezoneOffsetHours" name="timezoneOffsetHours"
+                                                    value="${state.filters.timezoneOffsetHours}"
+                                                    onchange="handleFilterChange(event)"
+                                                    placeholder="e.g. +2 for CEST, 0 for GMT"
+                                                    class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                            <p class="text-xs text-gray-500 mt-1">Adjusts UNIX time. Default +2 for CEST.</p>
+                                        </div>
                                     </div>
 
-                                    <div class="flex items-center p-3 rounded-lg bg-slate-700/50">
-                                        <input id="includeWeekends" name="includeWeekends" type="checkbox"
-                                                ${state.filters.includeWeekends ? 'checked' : ''}
-                                                onchange="handleFilterChange(event)"
-                                                class="h-5 w-5 text-primary-color border-slate-500 rounded focus:ring-primary-color bg-slate-700">
-                                        <label for="includeWeekends" class="ml-3 block text-base font-medium text-gray-200">
-                                            Include Weekends (Sat/Sun) <span class="text-sm text-gray-400">(All time on weekends is counted as overtime)</span>
-                                        </label>
+                                    <div class="space-y-3">
+                                        <div class="flex items-center p-3 rounded-lg bg-slate-700/50">
+                                            <input id="includeWeekends" name="includeWeekends" type="checkbox"
+                                                    ${state.filters.includeWeekends ? 'checked' : ''}
+                                                    onchange="handleFilterChange(event)"
+                                                    class="h-5 w-5 text-primary-color border-slate-500 rounded focus:ring-primary-color bg-slate-700">
+                                            <label for="includeWeekends" class="ml-3 block text-base font-medium text-gray-200">
+                                                Include Weekends (Sat/Sun) <span class="text-sm text-gray-400">(All time on weekends is counted as overtime)</span>
+                                            </label>
+                                        </div>
                                     </div>
                                 </div>
                                 
@@ -973,8 +1053,8 @@
 
             // Re-attach event listeners on every render
             document.getElementById('fileInput')?.addEventListener('change', handleFileUpload);
-            document.getElementById('map-date')?.addEventListener('change', handleColumnMapChange);
-            document.getElementById('map-time')?.addEventListener('change', handleColumnMapChange);
+            // Removed listeners for map-date/time/datetime
+            document.getElementById('map-unix')?.addEventListener('change', handleColumnMapChange); 
             document.getElementById('map-details')?.addEventListener('change', handleColumnMapChange);
             document.getElementById('map-duration')?.addEventListener('change', handleColumnMapChange);
             
@@ -982,6 +1062,7 @@
             document.getElementById('excludeStart')?.addEventListener('change', handleFilterChange);
             document.getElementById('excludeEnd')?.addEventListener('change', handleFilterChange);
             document.getElementById('includeWeekends')?.addEventListener('change', handleFilterChange);
+            document.getElementById('timezoneOffsetHours')?.addEventListener('change', handleFilterChange); // NEW listener
             document.getElementById('tempExcludeKeywords')?.addEventListener('input', handleTempKeywordChange);
         }
 
