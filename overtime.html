@@ -70,7 +70,6 @@
         input[type="time"]::-webkit-calendar-picker-indicator{
           filter: invert(48%) sepia(6%) saturate(2000%) hue-rotate(130deg) brightness(95%) contrast(80%);
         }
-
         /* Ensure table content wraps to accommodate long titles */
         .log-table-details {
             white-space: normal;
@@ -117,10 +116,12 @@
                 excludeEnd: '16:00',   
                 includeWeekends: false,
                 excludeKeywords: '',
+                includeKeywords: '', // <-- NEW: Filter to include keywords
                 // NEW: Timezone offset in hours relative to GMT. Default +2 for CEST.
                 timezoneOffsetHours: 2 
             },
             tempExcludeKeywords: '', 
+            tempIncludeKeywords: '', // <-- NEW: Temporary state for the include input
             isLoading: false,
             error: null,
             // LLM State
@@ -136,7 +137,7 @@
         function formatDuration(minutes) {
             if (typeof minutes !== 'number' || isNaN(minutes)) return '0 minutes';
             const hours = Math.floor(minutes / 60);
-            const mins = minutes % 60;
+            const mins = Math.round(minutes % 60);
             let parts = [];
             if (hours > 0) parts.push(`${hours}h`);
             if (mins > 0 || hours === 0) parts.push(`${mins}m`);
@@ -318,6 +319,7 @@
             }
 
             state.aiLoading = true;
+            state.aiSummary = null;
             state.aiReport = null;
             state.aiError = null;
             renderUI();
@@ -466,22 +468,40 @@
                 .map(k => String(k).trim().toLowerCase())
                 .filter(k => k.length > 0);
 
+            const keywordsToInclude = filters.includeKeywords
+                .split(',')
+                .map(k => String(k).trim().toLowerCase())
+                .filter(k => k.length > 0);
+
 
             const filtered = parsedData.filter(entry => {
                 const entryTime = dayjs(entry.from);
                 
                 const entryTitle = entry.title.toLowerCase();
+
+                // 1. Keyword Exclusion Check
                 const isExcludedByKeyword = keywordsToExclude.some(keyword => entryTitle.includes(keyword));
 
                 if (isExcludedByKeyword) {
                     return false; 
                 }
 
+                // 2. NEW: Keyword Inclusion Check
+                // If include keywords are specified, the entry MUST contain at least one of them.
+                if (keywordsToInclude.length > 0) {
+                    const isIncludedByKeyword = keywordsToInclude.some(keyword => entryTitle.includes(keyword));
+                    if (!isIncludedByKeyword) {
+                        return false; // If it doesn't match any include keyword, exclude it.
+                    }
+                }
+
+                // 3. Weekend Override Check
                 const isWeekend = entryTime.day() === 0 || entryTime.day() === 6; 
                 if (isWeekend) {
                     return includeWeekends; 
                 }
                 
+                // 4. Time-of-Day Exclusion Logic (Only applies to weekdays if filters are active)
                 if (!filtersActive) return true;
 
                 const entryMinutes = entryTime.hour() * 60 + entryTime.minute();
@@ -545,8 +565,10 @@
                 state.filters.excludeStart = '08:00'; 
                 state.filters.excludeEnd = '16:00';   
                 state.filters.excludeKeywords = ''; 
+                state.filters.includeKeywords = ''; // <-- NEW
                 state.filters.timezoneOffsetHours = 2; 
                 state.tempExcludeKeywords = ''; 
+                state.tempIncludeKeywords = ''; // <-- NEW
                 if (state.apiKey) {
                     state.aiError = null;
                 } else {
@@ -611,12 +633,14 @@
 
 
         // --- Event Handlers ---
-
+        
         function handleApiKeyChange(event) {
             state.apiKey = event.target.value.trim();
             // Clear the "key required" error when user starts typing
-            if (state.aiError && state.aiError.toLowerCase().includes('api key is required')) {
+            if (state.apiKey && state.aiError && state.aiError.toLowerCase().includes('api key is required')) {
                 state.aiError = null;
+            } else if (!state.apiKey) {
+                 state.aiError = "A Gemini API key is required to use the LLM features.";
             }
             renderUI();
         }
@@ -628,6 +652,15 @@
         function handleApplyKeywordFilter() {
             state.filters.excludeKeywords = state.tempExcludeKeywords;
             applyFilters(); 
+        }
+
+        function handleTempIncludeKeywordChange(event) {
+            state.tempIncludeKeywords = event.target.value;
+        }
+
+        function handleApplyIncludeKeywordFilter() {
+            state.filters.includeKeywords = state.tempIncludeKeywords;
+            applyFilters();
         }
 
         function handleColumnMapChange(event) {
@@ -694,6 +727,9 @@
 
             if (state.filters.excludeKeywords !== state.tempExcludeKeywords) {
                 state.tempExcludeKeywords = state.filters.excludeKeywords;
+            }
+            if (state.filters.includeKeywords !== state.tempIncludeKeywords) {
+                state.tempIncludeKeywords = state.filters.includeKeywords;
             }
 
             root.innerHTML = `
@@ -781,8 +817,7 @@
                                         <div>
                                             <label for="timezoneOffsetHours" class="block text-sm font-medium text-gray-300 mb-1">Source Timezone Offset</label>
                                             <input type="number" id="timezoneOffsetHours" name="timezoneOffsetHours" value="${state.filters.timezoneOffsetHours}" placeholder="e.g. 2 for CEST" class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
-                                            <p class="text-xs text-gray-500 mt-1">Adjusts UNIX time. Default +2 for CEST summer time, and +1 for CEST winter time.
-</p>
+                                            <p class="text-xs text-gray-500 mt-1">Adjusts UNIX time. Default +2 for CEST summer time, and +1 for CEST winter time.</p>
                                         </div>
                                     </div>
                                     <div class="space-y-3">
@@ -792,15 +827,44 @@
                                         </div>
                                     </div>
                                 </div>
+                                
+                                <!-- Keyword Exclusion -->
                                 <div>
                                     <h3 class="text-xl font-medium text-gray-100 mb-3">Keyword Exclusion (Details)</h3>
-                                    <p class="text-sm text-gray-400 mb-4">Exclude rows if 'Details' contains these words (e.g., Slack, Lunch). Separate with commas.</p>
+                                    <p class="text-sm text-gray-400 mb-4">Exclude rows where 'Details' contains these words (comma-separated).</p>
+                                    
                                     <div class="flex space-x-3 mt-1">
-                                        <input type="text" id="tempExcludeKeywords" placeholder="E.g.: Break, Personal, Spotify" value="${state.tempExcludeKeywords}" class="block w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
-                                        <button id="applyKeywordFilterBtn" class="px-6 py-3 bg-primary-color text-slate-900 font-bold rounded-lg shadow-lg hover:bg-emerald-600 transition duration-150 whitespace-nowrap">Apply Filter</button>
+                                        <input type="text" id="tempExcludeKeywords" 
+                                                placeholder="E.g.: Break, Personal, Spotify"
+                                                value="${state.tempExcludeKeywords}"
+                                                class="block w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                        <button id="applyExcludeFilterBtn"
+                                                class="px-6 py-3 bg-primary-color text-slate-900 font-bold rounded-lg shadow-lg hover:bg-emerald-600 transition duration-150 whitespace-nowrap">
+                                            Apply Filter
+                                        </button>
                                     </div>
                                 </div>
+
+                                <!-- NEW Keyword Inclusion -->
+                                <div class="mt-6">
+                                    <h3 class="text-xl font-medium text-gray-100 mb-3">Keyword Inclusion (Details)</h3>
+                                    <p class="text-sm text-gray-400 mb-4">Only show rows where 'Details' contains one of these keywords (comma-separated).</p>
+                                    
+                                    <div class="flex space-x-3 mt-1">
+                                        <input type="text" id="tempIncludeKeywords" 
+                                                placeholder="E.g.: ProjectX, Critical Bug"
+                                                value="${state.tempIncludeKeywords}"
+                                                class="block w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                        <button id="applyIncludeFilterBtn"
+                                                class="px-6 py-3 bg-primary-color text-slate-900 font-bold rounded-lg shadow-lg hover:bg-emerald-600 transition duration-150 whitespace-nowrap">
+                                            Apply Filter
+                                        </button>
+                                    </div>
+                                </div>
+
                             </div>
+
+                            <!-- Summary (MOVED TO RIGHT) -->
                             <div class="lg:col-span-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-6">
                                 <div class="bento-card p-6 bg-primary-color text-slate-900 shadow-xl">
                                     <h3 class="text-lg font-semibold mb-1 opacity-90 tracking-wide">TOTAL DURATION</h3>
@@ -914,7 +978,9 @@
             document.getElementById('includeWeekends')?.addEventListener('change', handleFilterChange);
             document.getElementById('timezoneOffsetHours')?.addEventListener('change', handleFilterChange);
             document.getElementById('tempExcludeKeywords')?.addEventListener('input', handleTempKeywordChange);
-            document.getElementById('applyKeywordFilterBtn')?.addEventListener('click', handleApplyKeywordFilter);
+            document.getElementById('tempIncludeKeywords')?.addEventListener('input', handleTempIncludeKeywordChange);
+            document.getElementById('applyExcludeFilterBtn')?.addEventListener('click', handleApplyKeywordFilter);
+            document.getElementById('applyIncludeFilterBtn')?.addEventListener('click', handleApplyIncludeKeywordFilter);
             document.getElementById('apiKeyInput')?.addEventListener('input', handleApiKeyChange);
             document.getElementById('summarizeBtn')?.addEventListener('click', handleSummarizeActivities);
             document.getElementById('draftReportBtn')?.addEventListener('click', handleDraftReport);
@@ -961,3 +1027,4 @@
     <!-- The JavaScript will render the full UI here -->
 </body>
 </html>
+
