@@ -66,6 +66,11 @@
             border-color: rgb(var(--primary));
             box-shadow: 0 0 0 1px rgb(var(--primary));
         }
+
+        input[type="time"]::-webkit-calendar-picker-indicator{
+          filter: invert(48%) sepia(6%) saturate(2000%) hue-rotate(130deg) brightness(95%) contrast(80%);
+        }
+
         /* Ensure table content wraps to accommodate long titles */
         .log-table-details {
             white-space: normal;
