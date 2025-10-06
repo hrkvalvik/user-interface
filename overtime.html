@@ -70,6 +70,10 @@
         .log-table-details {
             white-space: normal;
         }
+
+        input[type="time"]::-webkit-calendar-picker-indicator{
+          filter: invert(50%);
+        }
     </style>
     <script>
         // CRITICAL FIX: Load UTC plugin and safely check for all plugins to prevent internal Day.js crashes.
