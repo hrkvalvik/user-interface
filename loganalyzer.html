@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Activity Log Analyzer</title>
+    <title>Overtime Analyzer</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- dayjs for date/time manipulation -->
@@ -13,22 +13,28 @@
     <!-- SheetJS/xlsx for file parsing -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
+        /* Modern Gemini-Inspired Dark Mode Colors - Deep Slate Background with Emerald Accent */
         :root {
-            --primary: 24 100 120; /* Dark Teal */
-            --secondary: 251 191 36; /* Amber */
+            --primary: 16 185 129;   /* Emerald 500 (Main Accent/CTA) */
+            --secondary: 96 165 250; /* Blue 400 (Secondary Accent/Export) */
+            --bg-dark: 7 15 25;      /* Deep Slate/Near Black */
+            --card-dark: 17 25 35;   /* Slightly lighter surface */
         }
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #f7f9fb;
+            background-color: rgb(var(--bg-dark));
+            color: #e5e7eb; /* Light gray text */
         }
         .bento-card {
-            background-color: white;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-            transition: transform 0.2s, box-shadow 0.2s;
+            background-color: rgb(var(--card-dark));
+            border: 1px solid rgb(30 41 59); /* Slate 800 boundary */
+            border-radius: 1rem; 
+            box-shadow: 0 5px 15px -5px rgba(0, 0, 0, 0.5); /* Subtle lift */
+            transition: all 0.2s ease-in-out;
         }
         .bento-card:hover {
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+            border-color: rgb(var(--primary) / 0.5);
+            box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.6);
         }
         /* Custom scrollbar for log table */
         #logEntriesContainer {
@@ -39,7 +45,7 @@
             width: 8px;
         }
         #logEntriesContainer::-webkit-scrollbar-thumb {
-            background-color: rgb(var(--primary) / 0.5);
+            background-color: rgb(var(--primary) / 0.6);
             border-radius: 4px;
         }
         .text-primary-color {
@@ -47,6 +53,17 @@
         }
         .bg-primary-color {
             background-color: rgb(var(--primary));
+        }
+        /* Style adjustments for modern dark mode inputs */
+        input[type="file"], input[type="text"], input[type="time"], select {
+            background-color: rgb(25 35 49); /* Slightly darker than card for contrast */
+            border-color: rgb(47 62 82); /* Slate 700 */
+            color: white;
+            transition: border-color 0.15s;
+        }
+        input[type="text"]:focus, input[type="time"]:focus, select:focus {
+            border-color: rgb(var(--primary));
+            box-shadow: 0 0 0 1px rgb(var(--primary));
         }
         /* Ensure table content wraps to accommodate long titles */
         .log-table-details {
@@ -56,18 +73,17 @@
     <script>
         // Define state object for easier management
         let state = {
-            appBaseName: 'Overtime Analysator', // Base name remains fixed
-            fileTitle: null, // Will hold the raw file name (e.g., timeentries - memory_aid_6_10_2025-comma)
-            allRows: [], // Stores all raw rows from the file for re-parsing
-            rawData: [], // Stores parsed and cleaned data (before filters)
+            appBaseName: 'Overtime Analyzer', 
+            fileTitle: null, 
+            allRows: [], 
+            rawData: [], 
             filteredData: [],
             summary: {
                 totalMinutes: 0,
                 totalHours: 0,
                 uniqueLogs: 0,
             },
-            headers: [], // Stores headers from the uploaded file
-            // UPDATED: Now requires separate date and time columns
+            headers: [], 
             columnMap: { 
                 date: '', 
                 time: '',
@@ -75,19 +91,18 @@
                 duration: ''
             },
             filters: {
-                // Time-only exclusion (HH:mm format)
                 excludeStart: '00:00', 
                 excludeEnd: '00:00',
                 includeWeekends: false,
-                excludeKeywords: '' // Keywords to filter out
+                excludeKeywords: '' 
             },
+            tempExcludeKeywords: '', 
             isLoading: false,
             error: null
         };
 
         // --- Utility Functions ---
 
-        // Converts minutes to H hours, M minutes string
         function formatDuration(minutes) {
             if (typeof minutes !== 'number' || isNaN(minutes)) return '0 minutes';
             const hours = Math.floor(minutes / 60);
@@ -98,23 +113,20 @@
             return parts.join(' ');
         }
 
-        // Formats a Date object to a readable string (e.g., Mon, 6/Oct 09:00)
         function formatDateTime(dateTime) {
             return dayjs(dateTime).format('ddd, D/MMM HH:mm');
         }
 
-        // Converts standard formats to Dayjs object using combined date/time string
         function parseFromField(dateString) {
-            // Updated format list to handle combined date and time string: "M/D/YYYY HH:mm" or "D/M/YYYY HH:mm"
             const formats = [
                 'M/D/YYYY H:mm', 'M/D/YYYY HH:mm', 
                 'D/M/YYYY H:mm', 'D/M/YYYY HH:mm', 
-                'M.D.YYYY H:mm', 'YYYY-MM-DD HH:mm'
+                'M.D.YYYY H:mm', 'YYYY-MM-DD HH:mm',
+                'YYYY-M-D H:mm', 'YYYY-M-D HH:mm'
             ];
             return dayjs(dateString, formats, true);
         }
         
-        // Helper to guess column names based on keywords
         function guessColumn(headers, keywords) {
             for (const keyword of keywords) {
                 const match = headers.find(h => typeof h === 'string' && h.toLowerCase().includes(keyword));
@@ -125,8 +137,6 @@
 
         function calculateSummary() {
             const totalMinutes = state.filteredData.reduce((sum, entry) => sum + entry.duration, 0);
-
-            // Calculate unique log entries by title (simple unique count)
             const uniqueTitles = new Set(state.filteredData.map(entry => entry.title));
 
             state.summary = {
@@ -139,13 +149,11 @@
 
         // --- Data Processing ---
 
-        // Function to parse the raw rows using the current column map
         function parseRawData(rows, columnMap) {
             const parsed = [];
             const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
 
             if (!dateKey || !timeKey || !detailsKey || !durationKey) {
-                // Mapping is incomplete, cannot parse
                 return [];
             }
             
@@ -155,30 +163,22 @@
                 const detailsRaw = row[detailsKey];
                 const durationRaw = row[durationKey];
 
-                // REQUIRED: Skip row if DURATION is missing, as requested. Also skip if Date or Time is missing.
                 if (!dateRaw || !timeRaw || !durationRaw) {
                     continue;
                 }
 
-                // COMBINE: Create the full timestamp string from separate columns
                 const fromRaw = `${dateRaw} ${timeRaw}`; 
-
                 const fromDate = parseFromField(fromRaw);
                 let durationValue = durationRaw; 
 
-                // Sanitize duration (in case it's string '5,0' or similar, handle numeric data)
                 if (typeof durationRaw === 'string') {
                     durationValue = parseFloat(durationRaw.replace(',', '.'));
-                } else if (typeof durationRaw === 'number') {
-                    durationValue = durationRaw;
-                } else {
+                } else if (typeof durationRaw !== 'number') {
                     durationValue = NaN;
                 }
 
-                // Skip if date is invalid or duration is invalid/zero
                 if (fromDate.isValid() && !isNaN(durationValue) && durationValue > 0) {
                     
-                    // KEEP RAW DETAILS TEXT AS TITLE (Requested change)
                     let title = String(detailsRaw || '').trim(); 
                     if (title.length === 0) {
                          title = 'No Details Provided';
@@ -186,41 +186,34 @@
 
                     parsed.push({
                         from: fromDate.toDate(),
-                        title: title, // This now contains the raw, uncleaned string
-                        duration: durationValue, // In minutes
-                        rawFrom: fromRaw, // Store combined raw string for debugging
+                        title: title, 
+                        duration: durationValue, 
+                        rawFrom: fromRaw, 
                     });
                 } else {
-                    // Log to console if a row is skipped due to invalid date
                     console.warn(`Skipping row due to invalid date/time/duration: Date="${dateRaw}", Time="${timeRaw}", Duration="${durationRaw}"`);
                 }
             }
             return parsed;
         }
 
-        // Filter, summarize, and render
         function applyFilters() {
             const { allRows, columnMap, filters } = state;
 
-            // 1. Check mapping completeness
             const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
             const isMappingComplete = dateKey && timeKey && detailsKey && durationKey;
             
             if (!isMappingComplete || allRows.length === 0) {
                 state.rawData = [];
                 state.filteredData = [];
-                calculateSummary(); // Resets summary to zero
+                calculateSummary(); 
                 renderUI();
                 return;
             }
 
-            // 2. Parse data using the current column map
             const parsedData = parseRawData(allRows, columnMap);
             state.rawData = parsedData; 
 
-            // 3. Apply all filters
-            
-            // --- Time-of-Day Setup ---
             const startStr = filters.excludeStart;
             const endStr = filters.excludeEnd;
             const includeWeekends = filters.includeWeekends;
@@ -233,8 +226,6 @@
             const [endHour, endMinute] = endStr.split(':').map(Number);
             const endMinutes = (endHour || 0) * 60 + (endMinute || 0);
 
-            // --- Keyword Setup ---
-            // Split keywords by comma, trim whitespace, and convert to lower case
             const keywordsToExclude = filters.excludeKeywords
                 .split(',')
                 .map(k => String(k).trim().toLowerCase())
@@ -244,26 +235,24 @@
             const filtered = parsedData.filter(entry => {
                 const entryTime = dayjs(entry.from);
                 
-                // --- 3a. Keyword Exclusion Check ---
+                // 3a. Keyword Exclusion Check
                 const entryTitle = entry.title.toLowerCase();
                 const isExcludedByKeyword = keywordsToExclude.some(keyword => entryTitle.includes(keyword));
 
                 if (isExcludedByKeyword) {
-                    return false; // Exclude entry if any keyword is found
+                    return false; 
                 }
 
-
-                // --- 3b. Weekend Override Check ---
+                // 3b. Weekend Override Check
                 const isWeekend = entryTime.day() === 0 || entryTime.day() === 6;
 
                 if (includeWeekends && isWeekend) {
-                    return true; // Keep entry if it's a weekend, regardless of time filter
+                    return true; 
                 }
                 
-                // If time filters are not active, keep it (keyword check already passed).
                 if (!filtersActive) return true;
 
-                // --- 3c. Time-of-Day Exclusion Logic ---
+                // 3c. Time-of-Day Exclusion Logic
                 
                 const entryMinutes = entryTime.hour() * 60 + entryTime.minute();
 
@@ -278,10 +267,10 @@
                 }
 
                 if (isExcludedByTime) {
-                    return false; // Exclude
+                    return false; 
                 }
 
-                return true; // Keep
+                return true; 
             });
 
             state.filteredData = filtered;
@@ -293,7 +282,7 @@
         // --- File Handling Helpers ---
         function handleFileError(e) {
             console.error("File processing error:", e);
-            state.error = `Error processing file: ${e.message}. Vennligst sjekk om filen er gyldig og at kolonneoverskriftene er lesbare.`;
+            state.error = `Error processing file: ${e.message}. Please check if the file is valid and headers are readable.`;
             state.rawData = [];
             state.allRows = [];
             state.headers = [];
@@ -306,18 +295,15 @@
                 const sheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[sheetName];
 
-                // Convert to array of objects, keeping headers
                 const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
                 if (jsonRows.length < 1) {
                     throw new Error("File is empty or could not be parsed.");
                 }
 
-                // Assuming the first row is the header
-                const headers = jsonRows[0].filter(h => h); // Filter out empty headers
+                const headers = jsonRows[0].filter(h => h); 
                 state.headers = headers;
 
-                // Map data rows to objects using the headers
                 state.allRows = jsonRows.slice(1).map(row => {
                     const obj = {};
                     headers.forEach((header, i) => {
@@ -326,7 +312,6 @@
                     return obj;
                 });
 
-                // Guess initial column map
                 state.columnMap = {
                     date: guessColumn(headers, ['date', 'dato']),
                     time: guessColumn(headers, ['time', 'tid']),
@@ -334,12 +319,11 @@
                     duration: guessColumn(headers, ['duration', 'varighet', 'minutter']),
                 };
                 
-                // Reset filters
                 state.filters.excludeStart = '00:00';
                 state.filters.excludeEnd = '00:00';
                 state.filters.excludeKeywords = ''; 
+                state.tempExcludeKeywords = ''; 
 
-                // Start the full processing (parsing and filtering)
                 applyFilters();
 
             } catch (e) {
@@ -374,24 +358,19 @@
                 const isCSV = file.name.toLowerCase().endsWith('.csv');
 
                 if (isCSV) {
-                    // --- FIX FOR UTF-8 ENCODING IN CSV ---
-                    // Explicitly read CSV content as UTF-8 text using FileReader
                     const textData = await new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onload = (e) => resolve(e.target.result);
                         reader.onerror = (e) => reject(new Error("Failed to read CSV file."));
                         reader.readAsText(file, 'UTF-8');
                     });
-                    // Tell SheetJS to read the string data with the type 'string'
                     workbook = XLSX.read(textData, { type: 'string' });
 
                 } else {
-                    // For XLSX, use arrayBuffer (standard, less prone to text encoding issues)
                     const arrayBufferData = await file.arrayBuffer();
                     workbook = XLSX.read(arrayBufferData, { type: 'array' });
                 }
                 
-                // Continue with the standard processing flow
                 processWorkbook(workbook, file);
 
             } catch (e) {
@@ -400,7 +379,19 @@
         }
 
 
-        // --- Event Handlers ---
+        // --- Keyword Filter Logic (FIXED to maintain input focus) ---
+        function handleTempKeywordChange(event) {
+            state.tempExcludeKeywords = event.target.value;
+        }
+
+        function handleApplyKeywordFilter() {
+            state.filters.excludeKeywords = state.tempExcludeKeywords;
+            applyFilters(); 
+        }
+        // --- End Keyword Filter Logic ---
+
+
+        // --- Event Handlers (Time and Checkbox) ---
 
         function handleColumnMapChange(event) {
             const { name, value } = event.target;
@@ -428,7 +419,7 @@
             }
             state.error = null;
 
-            const headers = ["Fra (Formatted)", "Rå Fra (Raw From)", "Detaljer (Raw Title)", "Varighet (Duration Minutes)"];
+            const headers = ["From (Formatted)", "Raw From", "Details (Raw Title)", "Duration (Minutes)"];
             const csvRows = [headers.join(',')];
 
             for (const entry of state.filteredData) {
@@ -436,13 +427,12 @@
                 const row = [
                     `"${fromStr}"`,
                     `"${entry.rawFrom.replace(/"/g, '""')}"`, 
-                    `"${entry.title.replace(/"/g, '""')}"`, // Use raw title
+                    `"${entry.title.replace(/"/g, '""')}"`, 
                     entry.duration
                 ].join(',');
                 csvRows.push(row);
             }
 
-            // Using BOM for CSV ensures correct UTF-8 display in Excel/Google Sheets
             const BOM = "\uFEFF";
             const csvString = BOM + csvRows.join('\n');
             const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
@@ -465,47 +455,52 @@
             const isMappingVisible = state.headers.length > 0;
             const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
 
+            if (state.filters.excludeKeywords !== state.tempExcludeKeywords) {
+                state.tempExcludeKeywords = state.filters.excludeKeywords;
+            }
+
             root.innerHTML = `
-                <div class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-                    <h1 class="text-4xl font-extrabold text-gray-900 mb-6 text-primary-color">
-                        ${state.appBaseName}
-                        ${state.fileTitle ? `<span class="text-2xl font-semibold text-gray-500"> — Fil: ${state.fileTitle}</span>` : ''}
+                <div class="max-w-7xl mx-auto p-4 sm:p-8 lg:p-12">
+                    <h1 class="text-4xl font-extrabold text-gray-100 mb-8 tracking-tight">
+                        <span class="text-primary-color">${state.appBaseName}</span>
+                        ${state.fileTitle ? `<span class="text-xl font-semibold text-gray-400 block sm:inline mt-2 sm:mt-0"> — File: ${state.fileTitle}</span>` : ''}
                     </h1>
 
                     <!-- 1. File Upload & Error Display -->
-                    <div class="bento-card rounded-xl p-6 mb-8">
-                        <h2 class="text-xl font-semibold mb-4 text-primary-color">1. Last Opp Fil (Upload File)</h2>
+                    <div class="bento-card p-6 mb-8">
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-200 border-b border-slate-700/50 pb-3">1. Upload File</h2>
                         <input type="file" id="fileInput"
-                               class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2"
+                               class="block w-full text-sm text-gray-300 border rounded-lg cursor-pointer transition duration-150 p-3
+                                     bg-slate-900 border-slate-700 hover:border-primary-color/50"
                                accept=".csv, .xlsx">
                         ${state.isLoading ? `
-                            <p class="mt-4 text-center text-primary-color font-medium">Laster inn og analyserer data...</p>
+                            <p class="mt-4 text-center text-primary-color font-medium">Loading and analyzing data...</p>
                         ` : ''}
                         ${state.error ? `
-                            <div class="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg" role="alert">
-                                <p class="font-bold">Feil (Error)</p>
+                            <div class="mt-4 p-4 bg-red-900/50 border border-red-700 text-red-300 rounded-xl" role="alert">
+                                <p class="font-bold">Error</p>
                                 <p>${state.error}</p>
-                                <p class="text-sm">Forsøk å laste opp filen på nytt. Hvis det er en CSV, er det nå implementert en spesiell fiks for tegnsettet (UTF-8).</p>
+                                <p class="text-sm">Try uploading the file again. A special character set (UTF-8) fix is implemented for CSV files.</p>
                             </div>
                         ` : ''}
                     </div>
 
                     <!-- 1.b Column Mapping Section -->
                     ${isMappingVisible ? `
-                        <div class="bento-card rounded-xl p-6 mb-8 border-yellow-300 bg-yellow-50">
-                            <h2 class="text-xl font-semibold mb-4 text-primary-color">1.b Kolonne Kartlegging (Column Mapping)</h2>
-                            <p class="text-sm text-gray-700 mb-4">Vennligst bekreft hvilke kolonner som inneholder nødvendig informasjon fra filen din. (Please confirm which columns contain the necessary information from your file.)</p>
+                        <div class="bento-card p-6 mb-8 border-yellow-700 bg-slate-800">
+                            <h2 class="text-2xl font-semibold mb-4 text-yellow-300 border-b border-yellow-700/50 pb-3">1.b Column Mapping</h2>
+                            <p class="text-sm text-gray-300 mb-6">Please confirm which columns contain the necessary information from your file.</p>
                             
-                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                                 ${['date', 'time', 'details', 'duration'].map(key => `
                                     <div>
-                                        <label for="map-${key}" class="block text-sm font-medium text-gray-700 capitalize">
-                                            ${key === 'date' ? 'Dato (Date)' : key === 'time' ? 'Tid (Time)' : key === 'details' ? 'Detaljer (Details)' : 'Varighet (Duration Min.)'}
+                                        <label for="map-${key}" class="block text-sm font-medium text-gray-300 capitalize mb-1">
+                                            ${key === 'date' ? 'Date' : key === 'time' ? 'Time' : key === 'details' ? 'Details' : 'Duration (Min.)'}
                                         </label>
                                         <select id="map-${key}" name="${key}"
                                                 onchange="handleColumnMapChange(event)"
-                                                class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
-                                            <option value="" ${!state.columnMap[key] ? 'selected' : ''} disabled>Velg Kolonne...</option>
+                                                class="w-full rounded-lg shadow-inner p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white focus:border-primary-color focus:ring-primary-color">
+                                            <option value="" ${!state.columnMap[key] ? 'selected' : ''} disabled>Select Column...</option>
                                             ${state.headers.map(header => `
                                                 <option value="${header}" ${state.columnMap[key] === header ? 'selected' : ''}>
                                                     ${header}
@@ -516,115 +511,121 @@
                                 `).join('')}
                             </div>
                             ${!isMappingComplete ? `
-                                <p class="mt-4 p-2 bg-yellow-200 text-yellow-800 rounded-lg font-medium">Alle fire kolonner må velges for å starte analysen.</p>
+                                <p class="mt-6 p-3 bg-yellow-900/50 text-yellow-300 rounded-xl font-medium text-sm">All four columns must be selected to start the analysis.</p>
                             ` : ''}
                         </div>
                     ` : ''}
 
                     <!-- Conditional Analysis Sections (2 & 3) -->
                     ${isReadyToAnalyze ? `
-                        <!-- 2. Summary & Controls Grid -->
-                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                        <!-- 2. Summary & Controls Grid - ORDER SWAPPED -->
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
                             
-                            <!-- Filter Controls -->
-                            <div class="lg:col-span-2 bento-card rounded-xl p-6">
-                                <h2 class="text-xl font-semibold mb-4 text-primary-color">
-                                    2. Filtrering (Filtering)
+                            <!-- Filter Controls (MOVED TO LEFT) -->
+                            <div class="lg:col-span-2 bento-card p-6">
+                                <h2 class="text-2xl font-semibold mb-4 text-gray-200 border-b border-slate-700/50 pb-3">
+                                    2. Filtering
                                 </h2>
                                 
-                                <div class="mb-6 border-b pb-4 border-gray-100">
-                                    <h3 class="text-lg font-medium text-gray-800 mb-2">Ekskluder etter Tid (Time Exclusion)</h3>
-                                    <p class="text-sm text-gray-500 mb-4">Ekskluderer loggoppføringer der tidspunktet faller innenfor tidsperioden nedenfor. (Excludes entries where the time of day falls within the period below.)</p>
+                                <div class="mb-6 border-b pb-6 border-slate-700">
+                                    <h3 class="text-xl font-medium text-gray-100 mb-3">Time Exclusion (Daily)</h3>
+                                    <p class="text-sm text-gray-400 mb-4">Excludes log entries where the time of day falls within the period below.</p>
 
-                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
                                         <div>
-                                            <label for="excludeStart" class="block text-sm font-medium text-gray-700">Ekskluder Fra Tid (Exclude From Time) - HH:MM</label>
+                                            <label for="excludeStart" class="block text-sm font-medium text-gray-300 mb-1">Exclude From Time - HH:MM</label>
                                             <input type="time" id="excludeStart" name="excludeStart"
                                                    value="${state.filters.excludeStart}"
                                                    onchange="handleFilterChange(event)"
-                                                   class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
+                                                   class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
                                         </div>
                                         <div>
-                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-700">Ekskluder Til Tid (Exclude To Time) - HH:MM</label>
+                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-300 mb-1">Exclude To Time - HH:MM</label>
                                             <input type="time" id="excludeEnd" name="excludeEnd"
                                                    value="${state.filters.excludeEnd}"
                                                    onchange="handleFilterChange(event)"
-                                                   class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
+                                                   class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
                                         </div>
                                     </div>
 
-                                    <div class="flex items-center">
+                                    <div class="flex items-center p-3 rounded-lg bg-slate-700/50">
                                         <input id="includeWeekends" name="includeWeekends" type="checkbox"
                                                ${state.filters.includeWeekends ? 'checked' : ''}
                                                onchange="handleFilterChange(event)"
-                                               class="h-4 w-4 text-primary-color border-gray-300 rounded focus:ring-primary-color">
-                                        <label for="includeWeekends" class="ml-2 block text-sm font-medium text-gray-700">
-                                            Inkluder helger (Lørdag og Søndag) uavhengig av tidsfilter.
-                                            <span class="text-gray-500 text-xs">(Include weekends regardless of time filter.)</span>
+                                               class="h-5 w-5 text-primary-color border-slate-500 rounded focus:ring-primary-color bg-slate-700">
+                                        <label for="includeWeekends" class="ml-3 block text-base font-medium text-gray-200">
+                                            Include Weekends (Sat/Sun) <span class="text-sm text-gray-400">(Overrides time filter)</span>
                                         </label>
                                     </div>
                                 </div>
                                 
                                 <!-- Keyword Exclusion -->
                                 <div>
-                                    <h3 class="text-lg font-medium text-gray-800 mb-2">Ekskluder etter Nøkkelord (Keyword Exclusion)</h3>
-                                    <p class="text-sm text-gray-500 mb-2">Ekskluder rader hvor 'Detaljer'-feltet inneholder disse ordene/frasene. Skill med komma. (Exclude rows where 'Details' contains these words/phrases. Separate with commas.)</p>
-                                    <input type="text" id="excludeKeywords" name="excludeKeywords"
-                                           placeholder="F.eks: Slack, Google Meet, Lunsj"
-                                           value="${state.filters.excludeKeywords}"
-                                           oninput="handleFilterChange(event)"
-                                           class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-primary-color focus:ring-primary-color border p-2">
+                                    <h3 class="text-xl font-medium text-gray-100 mb-3">Keyword Exclusion (Details)</h3>
+                                    <p class="text-sm text-gray-400 mb-4">Exclude rows where the 'Details' field contains these words/frases. Separate with commas.</p>
+                                    
+                                    <div class="flex space-x-3 mt-1">
+                                        <input type="text" id="excludeKeywords" 
+                                               placeholder="E.g.: Slack, Google Meet, Lunch"
+                                               value="${state.tempExcludeKeywords}"
+                                               oninput="handleTempKeywordChange(event)"
+                                               class="block w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                        <button onclick="handleApplyKeywordFilter()"
+                                                class="px-6 py-3 bg-primary-color text-slate-900 font-bold rounded-lg shadow-lg hover:bg-emerald-600 transition duration-150 whitespace-nowrap">
+                                            Apply Filter
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 
-                            <!-- Summary (Bento Grid Style) -->
+                            <!-- Summary (MOVED TO RIGHT) -->
                             <div class="lg:col-span-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-6">
-                                <div class="bento-card rounded-xl p-6 bg-primary-color text-white">
-                                    <h3 class="text-lg font-bold mb-1 opacity-90">Total Varighet (Filtered)</h3>
-                                    <p class="text-4xl font-extrabold">${formatDuration(state.summary.totalMinutes)}</p>
-                                    <p class="text-sm opacity-80">${state.summary.totalMinutes.toFixed(0)} minutter totalt</p>
+                                <div class="bento-card p-6 bg-primary-color text-slate-900 shadow-xl">
+                                    <h3 class="text-lg font-semibold mb-1 opacity-90 tracking-wide">TOTAL DURATION (FILTERED)</h3>
+                                    <p class="text-5xl font-extrabold tracking-tight">${formatDuration(state.summary.totalMinutes)}</p>
+                                    <p class="text-sm opacity-80 mt-1">${state.summary.totalMinutes.toFixed(0)} minutes total</p>
                                 </div>
-                                <div class="bento-card rounded-xl p-6">
-                                    <h3 class="text-lg font-bold mb-1 text-primary-color">Loggoppføringer</h3>
-                                    <p class="text-4xl font-extrabold text-secondary">${state.summary.logCount}</p>
-                                    <p class="text-sm text-gray-500">Filtrerte rader / Total: ${state.rawData.length}</p>
+                                <div class="bento-card p-6 border border-slate-700">
+                                    <h3 class="text-lg font-semibold mb-1 text-primary-color tracking-wide">LOG ENTRIES</h3>
+                                    <p class="text-5xl font-extrabold text-secondary tracking-tight">${state.summary.logCount}</p>
+                                    <p class="text-sm text-gray-400 mt-1">Filtered Rows / Total: ${state.rawData.length}</p>
                                 </div>
                             </div>
                         </div>
 
                         <!-- 3. Filtered Results Table -->
-                        <div class="bento-card rounded-xl p-6 mb-8">
-                            <div class="flex justify-between items-center mb-4">
-                                <h2 class="text-xl font-semibold text-primary-color">3. Filtrerte Resultater (Filtered Results)</h2>
+                        <div class="bento-card p-6 mb-8">
+                            <div class="flex justify-between items-center mb-6 border-b border-slate-700/50 pb-3">
+                                <h2 class="text-2xl font-semibold text-gray-200">3. Filtered Results</h2>
                                 <button onclick="exportCSV()"
-                                        class="px-4 py-2 bg-secondary text-white font-bold rounded-lg shadow-md hover:bg-yellow-600 transition duration-150 disabled:opacity-50"
+                                        class="px-6 py-3 bg-secondary text-slate-900 font-bold rounded-lg shadow-md hover:bg-blue-500 transition duration-150 disabled:opacity-50"
                                         ${state.filteredData.length === 0 ? 'disabled' : ''}>
-                                    Eksporter CSV
+                                    Export CSV
                                 </button>
                             </div>
                             
                             <div id="logEntriesContainer" class="w-full">
-                                <table class="min-w-full divide-y divide-gray-200">
-                                    <thead class="bg-gray-50 sticky top-0">
+                                <table class="min-w-full divide-y divide-slate-700">
+                                    <thead class="bg-slate-700 sticky top-0 shadow-lg">
                                         <tr>
-                                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">Fra (Formatted)</th>
-                                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">Rå Fra (Raw From)</th>
-                                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/2">Tittel / Detaljer (Rådata)</th>
-                                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-1/12">Varighet (m)</th>
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/6">From (Formatted)</th>
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/6">Raw From</th>
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/2">Title / Details (Raw Data)</th>
+                                            <th class="px-4 py-4 text-right text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/12">Duration (m)</th>
                                         </tr>
                                     </thead>
-                                    <tbody class="bg-white divide-y divide-gray-200 text-sm">
+                                    <tbody class="divide-y divide-slate-700 text-sm bg-slate-800">
                                         ${state.filteredData.length > 0 ? state.filteredData.map(entry => `
-                                            <tr class="${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'bg-indigo-50/70' : ''}">
-                                                <td class="px-3 py-3 whitespace-nowrap font-medium text-gray-900">${formatDateTime(entry.from)}</td>
-                                                <td class="px-3 py-3 whitespace-nowrap text-xs text-gray-500 font-mono">${entry.rawFrom}</td>
-                                                <td class="px-3 py-3 text-gray-800 log-table-details">${entry.title}</td>
-                                                <td class="px-3 py-3 whitespace-nowrap text-right font-mono text-gray-700">${entry.duration.toFixed(0)}</td>
+                                            <tr class="${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'bg-green-900/10' : 'hover:bg-slate-700/50'} transition duration-100">
+                                                <td class="px-4 py-3 whitespace-nowrap font-medium text-gray-200">${formatDateTime(entry.from)}</td>
+                                                <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-400 font-mono">${entry.rawFrom}</td>
+                                                <td class="px-4 py-3 text-gray-300 log-table-details">${entry.title}</td>
+                                                <td class="px-4 py-3 whitespace-nowrap text-right font-mono text-gray-300">${entry.duration.toFixed(0)}</td>
                                             </tr>
                                         `).join('') : `
                                             <tr>
                                                 <td colspan="4" class="px-6 py-4 text-center text-gray-500 italic">
-                                                    Ingen loggoppføringer matcher gjeldende filterinnstillinger.
+                                                    No log entries match the current filter settings.
                                                 </td>
                                             </tr>
                                         `}
@@ -634,13 +635,13 @@
                         </div>
                     ` : isMappingVisible ? `
                         <!-- Mapping is visible but incomplete -->
-                        <div class="bento-card rounded-xl p-6 mb-8 text-center text-gray-500">
-                             <p class="text-lg">Fullfør kolonne-kartleggingen ovenfor for å se analyseresultatene.</p>
+                        <div class="bento-card p-8 mb-8 text-center text-gray-400">
+                             <p class="text-xl font-medium">Complete the column mapping above to see analysis results.</p>
                         </div>
                     ` : `
                         <!-- Placeholder when no data is loaded -->
-                         <div class="bento-card rounded-xl p-6 mb-8 text-center text-gray-500">
-                             <p class="text-lg">Last opp en fil for å starte analysen.</p>
+                         <div class="bento-card p-8 mb-8 text-center text-gray-400">
+                             <p class="text-xl font-medium">Upload a file to start the analysis.</p>
                         </div>
                     `}
                 </div>
@@ -652,10 +653,10 @@
             document.getElementById('map-time')?.addEventListener('change', handleColumnMapChange);
             document.getElementById('map-details')?.addEventListener('change', handleColumnMapChange);
             document.getElementById('map-duration')?.addEventListener('change', handleColumnMapChange);
+            
             document.getElementById('excludeStart')?.addEventListener('change', handleFilterChange);
             document.getElementById('excludeEnd')?.addEventListener('change', handleFilterChange);
             document.getElementById('includeWeekends')?.addEventListener('change', handleFilterChange);
-            document.getElementById('excludeKeywords')?.addEventListener('input', handleFilterChange);
         }
 
         // Initialize the application when the window loads
@@ -671,13 +672,13 @@
             if (!modal) {
                 modal = document.createElement('div');
                 modal.id = 'customAlert';
-                modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300';
+                modal.className = 'fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 transition-opacity duration-300';
                 modal.innerHTML = `
-                    <div class="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full transform transition-all duration-300 scale-95 opacity-0">
-                        <h3 class="text-xl font-bold mb-3 text-primary-color">Vellykket (Success)</h3>
-                        <p id="alertMessage" class="mb-4 text-gray-700"></p>
+                    <div class="bg-slate-800 rounded-xl shadow-2xl p-6 max-w-sm w-full transform transition-all duration-300 scale-95 opacity-0 border border-slate-700">
+                        <h3 class="text-xl font-bold mb-3 text-primary-color">Success</h3>
+                        <p id="alertMessage" class="mb-4 text-gray-300"></p>
                         <button onclick="document.getElementById('customAlert').classList.add('opacity-0', 'scale-95'); setTimeout(() => document.getElementById('customAlert').style.display = 'none', 300);"
-                                class="w-full px-4 py-2 bg-primary-color text-white font-bold rounded-lg hover:bg-teal-700 transition duration-150">
+                                class="w-full px-4 py-2 bg-primary-color text-slate-900 font-bold rounded-lg hover:bg-emerald-600 transition duration-150">
                             OK
                         </button>
                     </div>
