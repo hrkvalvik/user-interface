@@ -72,7 +72,7 @@
     </style>
     <script>
         // --- Gemini API Constants ---
-        const API_KEY = "AIzaSyBFB1bR72rF8Fpfhy_v6NnX-zO45nVHKvg"; // Leave this empty for Canvas environment to provide the key.
+        const API_KEY = ""; // FIX: Ensuring API_KEY is empty for environment compatibility
         const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
         const MAX_RETRIES = 5;
         const IS_API_KEY_PROVIDED = API_KEY && API_KEY.length > 0;
@@ -109,7 +109,7 @@
             aiSummary: null,
             aiReport: null,
             aiLoading: false,
-            aiError: !IS_API_KEY_PROVIDED ? "Gemini API key is required for LLM features. If you are in a supported environment, leave the API_KEY empty." : null
+            aiError: !API_KEY && typeof __api_key === 'undefined' ? "Gemini API key is required for LLM features. If you are in a supported environment, leave the API_KEY empty." : null
         };
 
         // --- Utility Functions ---
@@ -135,16 +135,20 @@
 
         function parseFromField(dateString) {
             const formats = [
+                // Added ISO-like format common in logs
+                'YYYY-MM-DD HH:mm', 'YYYY-M-D H:mm',
+                // Existing formats
                 'M/D/YYYY H:mm', 'M/D/YYYY HH:mm', 
                 'D/M/YYYY H:mm', 'D/M/YYYY HH:mm', 
-                'M.D.YYYY H:mm', 'YYYY-MM-DD HH:mm',
-                'YYYY-M-D H:mm', 'YYYY-M-D HH:mm'
+                'M.D.YYYY H:mm', 
             ];
+            // CRITICAL: Using strict parsing (true)
             return dayjs(dateString, formats, true);
         }
         
         function guessColumn(headers, keywords) {
             for (const keyword of keywords) {
+                // Ensure keyword comparison is case-insensitive
                 const match = headers.find(h => typeof h === 'string' && h.toLowerCase().includes(keyword));
                 if (match) return match;
             }
@@ -163,7 +167,21 @@
             };
         }
         
-        // --- LLM API Functions ---
+        // NEW: Checks which required fields are missing from the mapping
+        function getMissingMappings() {
+            const requiredKeys = [
+                { key: 'date', name: 'Date' },
+                { key: 'time', name: 'Time' },
+                { key: 'details', name: 'Details/Title' },
+                { key: 'duration', name: 'Duration (Min.)' }
+            ];
+            
+            return requiredKeys
+                .filter(item => !state.columnMap[item.key])
+                .map(item => item.name);
+        }
+
+        // --- LLM API Functions (Omitted for brevity, assumed correct) ---
 
         async function callGeminiApi(payload, useSearchGrounding = false, systemInstruction = null) {
             // Check if API key is expected to be present
@@ -271,7 +289,7 @@
                 };
 
                 // Use search grounding to help categorize unfamiliar titles/programs
-                const result = await callGeminiApi(payload, true, systemPrompt); 
+                const result = await callGeminiApi(payload, true, systemInstruction); 
 
                 state.aiSummary = result;
                 state.aiError = null; 
@@ -323,7 +341,7 @@
                     contents: [{ parts: [{ text: userQuery }] }],
                 };
 
-                const result = await callGeminiApi(payload, false, systemPrompt); // Use false for search grounding
+                const result = await callGeminiApi(payload, false, systemInstruction); // Use false for search grounding
 
                 state.aiReport = result;
                 state.aiError = null; 
@@ -352,8 +370,9 @@
                 const detailsRaw = row[detailsKey];
                 const durationRaw = row[durationKey];
 
-                if (!dateRaw || !timeRaw || !durationRaw) {
-                    continue;
+                // Skip if any mandatory raw fields are null/empty
+                if (!dateRaw || !timeRaw || !detailsRaw || !durationRaw) {
+                    continue; 
                 }
 
                 const fromRaw = `${dateRaw} ${timeRaw}`; 
@@ -362,7 +381,7 @@
 
                 if (typeof durationRaw === 'string') {
                     // Normalize string number format (e.g., '30.5' or '30,5')
-                    durationValue = parseFloat(durationRaw.replace(',', '.'));
+                    durationValue = parseFloat(String(durationRaw).replace(',', '.'));
                 } else if (typeof durationRaw !== 'number') {
                     durationValue = NaN;
                 }
@@ -393,7 +412,8 @@
             const { date: dateKey, time: timeKey, details: detailsKey, duration: durationKey } = columnMap;
             const isMappingComplete = dateKey && timeKey && detailsKey && durationKey;
             
-            if (!isMappingComplete || allRows.length === 0) {
+            if (allRows.length === 0) {
+                // No data loaded, nothing to do.
                 state.rawData = [];
                 state.filteredData = [];
                 calculateSummary(); 
@@ -403,6 +423,14 @@
 
             const parsedData = parseRawData(allRows, columnMap);
             state.rawData = parsedData; 
+            
+            // Only proceed to filtering if mapping is complete AND we have valid data entries
+            if (!isMappingComplete) {
+                state.filteredData = [];
+                calculateSummary(); 
+                renderUI();
+                return;
+            }
 
             const startStr = filters.excludeStart;
             const endStr = filters.excludeEnd;
@@ -506,10 +534,11 @@
                 });
 
                 // Set intelligent defaults for the mapping based on common keywords
+                // The auto-detection logic is crucial here for a smooth start.
                 state.columnMap = {
-                    date: guessColumn(headers, ['date', 'dato']),
-                    time: guessColumn(headers, ['time', 'tid']),
-                    details: guessColumn(headers, ['details', 'tittel', 'program', 'activity']),
+                    date: guessColumn(headers, ['date', 'dato', 'start date']),
+                    time: guessColumn(headers, ['time', 'tid', 'start time']),
+                    details: guessColumn(headers, ['details', 'tittel', 'program', 'activity', 'title']),
                     duration: guessColumn(headers, ['duration', 'varighet', 'minutter', 'mins']),
                 };
                 
@@ -661,9 +690,14 @@
         function renderUI() {
             const root = document.getElementById('app-root');
 
-            const isReadyToAnalyze = state.rawData.length > 0;
+            const isDataLoaded = state.allRows.length > 0; // Check if the file was loaded successfully
             const isMappingVisible = state.headers.length > 0;
             const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+            const missingMappings = getMissingMappings(); // Get list of missing fields
+
+            // Only consider data ready to analyze if mapping is complete AND we have successfully parsed some rows
+            const isReadyToAnalyze = isMappingComplete && state.rawData.length > 0;
+
 
             // Ensure temp and actual filter keywords are synchronized only when the filter is applied
             if (state.filters.excludeKeywords !== state.tempExcludeKeywords) {
@@ -723,14 +757,23 @@
                                     </div>
                                 `).join('')}
                             </div>
+
+                            <!-- Validation and Status Messages -->
                             ${!isMappingComplete ? `
-                                <p class="mt-6 p-3 bg-red-900/50 text-red-300 rounded-xl font-medium text-sm border border-red-700">All four columns must be selected to start the filtering and analysis.</p>
+                                <p class="mt-6 p-3 bg-red-900/50 text-red-300 rounded-xl font-medium text-sm border border-red-700">
+                                    Mapping incomplete! Please select columns for: 
+                                    <strong>${missingMappings.join(', ')}</strong>.
+                                </p>
+                            ` : isDataLoaded && state.rawData.length === 0 ? `
+                                <p class="mt-6 p-3 bg-yellow-900/50 text-yellow-300 rounded-xl font-medium text-sm border border-yellow-700">
+                                    Mapping is complete, but <strong>no valid entries were found</strong> after attempting to parse the date, time, duration, and ensuring all fields are present. Check your raw data for formatting issues (e.g., non-numeric durations or bad date/time formats).
+                                </p>
                             ` : ''}
                         </div>
                     ` : ''}
 
                     <!-- Conditional Analysis Sections (2 & 3 & 4) -->
-                    ${isReadyToAnalyze && isMappingComplete ? `
+                    ${isReadyToAnalyze ? `
                         <!-- 2. Summary & Controls Grid - ORDER SWAPPED -->
                         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
                             
@@ -913,7 +956,7 @@
                             </div>
                         </div>
                     ` : isMappingVisible ? `
-                        <!-- Mapping is visible but incomplete -->
+                        <!-- Mapping is visible but incomplete, but we loaded headers -->
                         <div class="bento-card p-8 mb-8 text-center text-gray-400">
                              <p class="text-xl font-medium">Please complete the column mapping above (Step 1.b) to enable filtering and analysis.</p>
                         </div>
