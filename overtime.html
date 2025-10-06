@@ -97,8 +97,8 @@
                 duration: ''
             },
             filters: {
-                excludeStart: '00:00', 
-                excludeEnd: '00:00',
+                excludeStart: '09:00', // Default start time for office hours
+                excludeEnd: '17:00',   // Default end time for office hours
                 includeWeekends: false,
                 excludeKeywords: '' 
             },
@@ -109,7 +109,7 @@
             aiSummary: null,
             aiReport: null,
             aiLoading: false,
-            aiError: !IS_API_KEY_PROVIDED ? "Gemini API key is required for LLM features. Please provide a key if you're not in a supported environment." : null
+            aiError: !IS_API_KEY_PROVIDED ? "Gemini API key is required for LLM features. If you are in a supported environment, leave the API_KEY empty." : null
         };
 
         // --- Utility Functions ---
@@ -167,12 +167,13 @@
 
         async function callGeminiApi(payload, useSearchGrounding = false, systemInstruction = null) {
             // Check if API key is expected to be present
-            if (!IS_API_KEY_PROVIDED) {
+            if (!API_KEY && typeof __api_key === 'undefined') {
                 throw new Error("API Key required. Gemini features are disabled until an API Key is available.");
             }
             
-            // Helper to call the Gemini API with backoff
-            
+            // Determine API Key to use (precedence: defined API_KEY > environment key)
+            const finalApiKey = API_KEY || (typeof __api_key !== 'undefined' ? __api_key : '');
+
             // Construct the payload dynamically
             const finalPayload = {
                 contents: payload.contents,
@@ -183,7 +184,7 @@
             
             for (let i = 0; i < MAX_RETRIES; i++) {
                 try {
-                    const response = await fetch(`${API_URL}?key=${API_KEY}`, {
+                    const response = await fetch(`${API_URL}?key=${finalApiKey}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(finalPayload)
@@ -195,10 +196,10 @@
                     }
 
                     if (!response.ok) {
-                        // Specifically check for 401 which points to key issues
+                        const errorData = await response.text();
                         const errorText = response.status === 401 
                             ? "API Key is invalid or unauthorized (Status 401). Please check your key." 
-                            : `Gemini API request failed with status: ${response.status}`;
+                            : `Gemini API request failed with status: ${response.status}. Details: ${errorData}`;
                         throw new Error(errorText);
                     }
 
@@ -219,7 +220,7 @@
                         }
                         return { text, sources };
                     } else {
-                        throw new Error("Gemini API returned an invalid response structure or blocked content.");
+                        throw new Error("Gemini API returned an invalid response structure or blocked content. Check console for details.");
                     }
                 } catch (error) {
                     console.error("Gemini API attempt failed:", error);
@@ -232,17 +233,18 @@
         }
         
         async function handleSummarizeActivities() {
+            const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+
             if (state.filteredData.length === 0 || !isMappingComplete) {
                 state.aiError = "Filter and analyze data (Step 3) first before generating AI insights.";
                 renderUI();
                 return;
             }
-            if (!IS_API_KEY_PROVIDED) {
+            if (!API_KEY && typeof __api_key === 'undefined') {
                 state.aiError = "API Key is missing. Cannot call Gemini API.";
                 renderUI();
                 return;
             }
-
 
             state.aiLoading = true;
             state.aiSummary = null;
@@ -252,6 +254,7 @@
 
             try {
                 // Limit the data sent to the LLM to prevent hitting token limits
+                // We send up to 500 entries (titles, time, duration)
                 const dataForPrompt = state.filteredData.slice(0, 500).map(entry => 
                     `[${formatDayName(entry.from)} ${dayjs(entry.from).format('HH:mm')}] ${entry.title}: ${entry.duration.toFixed(0)} min`
                 ).join('\n');
@@ -282,17 +285,18 @@
         }
 
         async function handleDraftReport() {
+            const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
+            
             if (state.filteredData.length === 0 || !isMappingComplete) {
                 state.aiError = "Filter and analyze data (Step 3) first before generating AI insights.";
                 renderUI();
                 return;
             }
-            if (!IS_API_KEY_PROVIDED) {
+            if (!API_KEY && typeof __api_key === 'undefined') {
                 state.aiError = "API Key is missing. Cannot call Gemini API.";
                 renderUI();
                 return;
             }
-
 
             state.aiLoading = true;
             state.aiReport = null;
@@ -319,7 +323,7 @@
                     contents: [{ parts: [{ text: userQuery }] }],
                 };
 
-                const result = await callGeminiApi(payload, false, systemPrompt); // Standard text generation
+                const result = await callGeminiApi(payload, false, systemPrompt); // Use false for search grounding
 
                 state.aiReport = result;
                 state.aiError = null; 
@@ -357,6 +361,7 @@
                 let durationValue = durationRaw; 
 
                 if (typeof durationRaw === 'string') {
+                    // Normalize string number format (e.g., '30.5' or '30,5')
                     durationValue = parseFloat(durationRaw.replace(',', '.'));
                 } else if (typeof durationRaw !== 'number') {
                     durationValue = NaN;
@@ -403,7 +408,7 @@
             const endStr = filters.excludeEnd;
             const includeWeekends = filters.includeWeekends;
             const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
-            const filtersActive = timeRegex.test(startStr) && timeRegex.test(endStr);
+            const filtersActive = timeRegex.test(startStr) && timeRegex.test(endStr) && (startStr !== endStr);
             
             const [startHour, startMinute] = startStr.split(':').map(Number);
             const startMinutes = (startHour || 0) * 60 + (startMinute || 0);
@@ -420,7 +425,7 @@
             const filtered = parsedData.filter(entry => {
                 const entryTime = dayjs(entry.from);
                 
-                // 3a. Keyword Exclusion Check
+                // 1. Keyword Exclusion Check
                 const entryTitle = entry.title.toLowerCase();
                 const isExcludedByKeyword = keywordsToExclude.some(keyword => entryTitle.includes(keyword));
 
@@ -428,26 +433,26 @@
                     return false; 
                 }
 
-                // 3b. Weekend Override Check
-                const isWeekend = entryTime.day() === 0 || entryTime.day() === 6;
+                // 2. Weekend Override Check
+                const isWeekend = entryTime.day() === 0 || entryTime.day() === 6; // 0=Sunday, 6=Saturday
 
-                if (includeWeekends && isWeekend) {
-                    return true; 
+                if (isWeekend) {
+                    // If it's a weekend, only include it if the 'Include Weekends' box is checked.
+                    return includeWeekends; 
                 }
                 
+                // 3. Time-of-Day Exclusion Logic (Only applies to weekdays if filters are active)
                 if (!filtersActive) return true;
 
-                // 3c. Time-of-Day Exclusion Logic
-                
                 const entryMinutes = entryTime.hour() * 60 + entryTime.minute();
 
                 let isExcludedByTime = false;
 
                 if (startMinutes <= endMinutes) {
-                    // Normal range (e.g., 09:00 to 17:00)
+                    // Normal range (e.g., 09:00 to 17:00). Exclude if WITHIN this range.
                     isExcludedByTime = entryMinutes >= startMinutes && entryMinutes <= endMinutes;
                 } else {
-                    // Range spans midnight (e.g., 23:00 to 06:00)
+                    // Range spans midnight (e.g., 23:00 to 06:00). Exclude if OUTSIDE the 'day' (i.e., inside the exclusion range).
                     isExcludedByTime = entryMinutes >= startMinutes || entryMinutes <= endMinutes;
                 }
 
@@ -500,17 +505,20 @@
                     return obj;
                 });
 
+                // Set intelligent defaults for the mapping based on common keywords
                 state.columnMap = {
                     date: guessColumn(headers, ['date', 'dato']),
                     time: guessColumn(headers, ['time', 'tid']),
-                    details: guessColumn(headers, ['details', 'tittel', 'program']),
-                    duration: guessColumn(headers, ['duration', 'varighet', 'minutter']),
+                    details: guessColumn(headers, ['details', 'tittel', 'program', 'activity']),
+                    duration: guessColumn(headers, ['duration', 'varighet', 'minutter', 'mins']),
                 };
                 
-                state.filters.excludeStart = '00:00';
-                state.filters.excludeEnd = '00:00';
+                // Reset filters to defaults on new file load
+                state.filters.excludeStart = '09:00';
+                state.filters.excludeEnd = '17:00';
                 state.filters.excludeKeywords = ''; 
                 state.tempExcludeKeywords = ''; 
+                state.aiError = !API_KEY && typeof __api_key === 'undefined' ? "Gemini API key is required for LLM features. If you are in a supported environment, leave the API_KEY empty." : null;
 
                 applyFilters();
 
@@ -550,6 +558,7 @@
                 const isCSV = file.name.toLowerCase().endsWith('.csv');
 
                 if (isCSV) {
+                    // Read CSV as text with UTF-8 to handle special characters correctly
                     const textData = await new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onload = (e) => resolve(e.target.result);
@@ -559,6 +568,7 @@
                     workbook = XLSX.read(textData, { type: 'string' });
 
                 } else {
+                    // Handle binary file types (xlsx)
                     const arrayBufferData = await file.arrayBuffer();
                     workbook = XLSX.read(arrayBufferData, { type: 'array' });
                 }
@@ -574,6 +584,7 @@
         // --- Keyword Filter Logic (FIXED to maintain input focus) ---
         function handleTempKeywordChange(event) {
             state.tempExcludeKeywords = event.target.value;
+            // Note: We intentionally DO NOT call renderUI here to prevent losing focus
         }
 
         function handleApplyKeywordFilter() {
@@ -616,14 +627,18 @@
             const csvRows = [headers.join(',')];
 
             for (const entry of state.filteredData) {
+                // Ensure commas and quotes are handled in data fields
+                const cleanTitle = entry.title.replace(/"/g, '""');
+                const cleanRawFrom = entry.rawFrom.replace(/"/g, '""');
+
                 const fromStr = dayjs(entry.from).format('YYYY-MM-DD HH:mm:ss');
                 const dayStr = formatDayName(entry.from); // Get day name
                 const row = [
                     `"${fromStr}"`,
                     `"${dayStr}"`, // Include day name
-                    `"${entry.rawFrom.replace(/"/g, '""')}"`, 
-                    `"${entry.title.replace(/"/g, '""')}"`, 
-                    entry.duration
+                    `"${cleanRawFrom}"`, 
+                    `"${cleanTitle}"`, 
+                    entry.duration.toFixed(2) // Export duration with precision
                 ].join(',');
                 csvRows.push(row);
             }
@@ -638,7 +653,7 @@
             link.click();
             document.body.removeChild(link);
 
-            alert("Export complete! You can open this CSV file directly in Google Sheets by choosing 'File' > 'Import' from within Google Sheets.");
+            alert("Export complete! Your filtered log has been saved as a CSV file.");
         }
 
         // --- UI Rendering ---
@@ -650,12 +665,13 @@
             const isMappingVisible = state.headers.length > 0;
             const isMappingComplete = state.columnMap.date && state.columnMap.time && state.columnMap.details && state.columnMap.duration;
 
+            // Ensure temp and actual filter keywords are synchronized only when the filter is applied
             if (state.filters.excludeKeywords !== state.tempExcludeKeywords) {
                 state.tempExcludeKeywords = state.filters.excludeKeywords;
             }
 
             // Check if API key is explicitly missing for the dedicated warning
-            const isApiKeyMissing = !IS_API_KEY_PROVIDED;
+            const isApiKeyMissing = !API_KEY && typeof __api_key === 'undefined';
 
             root.innerHTML = `
                 <div class="max-w-7xl mx-auto p-4 sm:p-8 lg:p-12">
@@ -678,7 +694,6 @@
                             <div class="mt-4 p-4 bg-red-900/50 border border-red-700 text-red-300 rounded-xl" role="alert">
                                 <p class="font-bold">Error</p>
                                 <p>${state.error}</p>
-                                <p class="text-sm">Try uploading the file again. A special character set (UTF-8) fix is implemented for CSV files.</p>
                             </div>
                         ` : ''}
                     </div>
@@ -686,14 +701,14 @@
                     <!-- 1.b Column Mapping Section -->
                     ${isMappingVisible ? `
                         <div class="bento-card p-6 mb-8 border-yellow-700 bg-slate-800">
-                            <h2 class="text-2xl font-semibold mb-4 text-yellow-300 border-b border-yellow-700/50 pb-3">1.b Column Mapping</h2>
-                            <p class="text-sm text-gray-300 mb-6">Please confirm which columns contain the necessary information from your file.</p>
+                            <h2 class="text-2xl font-semibold mb-4 text-yellow-300 border-b border-yellow-700/50 pb-3">1.b Column Mapping (Auto-Detected)</h2>
+                            <p class="text-sm text-gray-300 mb-6">Confirm or adjust which columns contain the **Date**, **Time**, **Details**, and **Duration** (in minutes) data.</p>
                             
                             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                                 ${['date', 'time', 'details', 'duration'].map(key => `
                                     <div>
                                         <label for="map-${key}" class="block text-sm font-medium text-gray-300 capitalize mb-1">
-                                            ${key === 'date' ? 'Date' : key === 'time' ? 'Time' : key === 'details' ? 'Details' : 'Duration (Min.)'}
+                                            ${key === 'date' ? 'Date' : key === 'time' ? 'Time' : key === 'details' ? 'Details/Title' : 'Duration (Min.)'}
                                         </label>
                                         <select id="map-${key}" name="${key}"
                                                 onchange="handleColumnMapChange(event)"
@@ -709,13 +724,13 @@
                                 `).join('')}
                             </div>
                             ${!isMappingComplete ? `
-                                <p class="mt-6 p-3 bg-yellow-900/50 text-yellow-300 rounded-xl font-medium text-sm">All four columns must be selected to start the analysis.</p>
+                                <p class="mt-6 p-3 bg-red-900/50 text-red-300 rounded-xl font-medium text-sm border border-red-700">All four columns must be selected to start the filtering and analysis.</p>
                             ` : ''}
                         </div>
                     ` : ''}
 
                     <!-- Conditional Analysis Sections (2 & 3 & 4) -->
-                    ${isReadyToAnalyze ? `
+                    ${isReadyToAnalyze && isMappingComplete ? `
                         <!-- 2. Summary & Controls Grid - ORDER SWAPPED -->
                         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
                             
@@ -727,32 +742,32 @@
                                 
                                 <div class="mb-6 border-b pb-6 border-slate-700">
                                     <h3 class="text-xl font-medium text-gray-100 mb-3">Time Exclusion (Daily)</h3>
-                                    <p class="text-sm text-gray-400 mb-4">Excludes log entries where the time of day falls within the period below.</p>
+                                    <p class="text-sm text-gray-400 mb-4">Exclude logs that fall between (or inside) the designated working hours. This isolates **off-hours** activity.</p>
 
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
                                         <div>
-                                            <label for="excludeStart" class="block text-sm font-medium text-gray-300 mb-1">Exclude From Time - HH:MM</label>
+                                            <label for="excludeStart" class="block text-sm font-medium text-gray-300 mb-1">Exclude From Time (E.g., 09:00)</label>
                                             <input type="time" id="excludeStart" name="excludeStart"
-                                                   value="${state.filters.excludeStart}"
-                                                   onchange="handleFilterChange(event)"
-                                                   class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                                    value="${state.filters.excludeStart}"
+                                                    onchange="handleFilterChange(event)"
+                                                    class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
                                         </div>
                                         <div>
-                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-300 mb-1">Exclude To Time - HH:MM</label>
+                                            <label for="excludeEnd" class="block text-sm font-medium text-gray-300 mb-1">Exclude To Time (E.g., 17:00)</label>
                                             <input type="time" id="excludeEnd" name="excludeEnd"
-                                                   value="${state.filters.excludeEnd}"
-                                                   onchange="handleFilterChange(event)"
-                                                   class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                                    value="${state.filters.excludeEnd}"
+                                                    onchange="handleFilterChange(event)"
+                                                    class="w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
                                         </div>
                                     </div>
 
                                     <div class="flex items-center p-3 rounded-lg bg-slate-700/50">
                                         <input id="includeWeekends" name="includeWeekends" type="checkbox"
-                                               ${state.filters.includeWeekends ? 'checked' : ''}
-                                               onchange="handleFilterChange(event)"
-                                               class="h-5 w-5 text-primary-color border-slate-500 rounded focus:ring-primary-color bg-slate-700">
+                                                ${state.filters.includeWeekends ? 'checked' : ''}
+                                                onchange="handleFilterChange(event)"
+                                                class="h-5 w-5 text-primary-color border-slate-500 rounded focus:ring-primary-color bg-slate-700">
                                         <label for="includeWeekends" class="ml-3 block text-base font-medium text-gray-200">
-                                            Include Weekends (Sat/Sun) <span class="text-sm text-gray-400">(Overrides time filter)</span>
+                                            Include Weekends (Sat/Sun) <span class="text-sm text-gray-400">(All time on weekends is counted as overtime)</span>
                                         </label>
                                     </div>
                                 </div>
@@ -760,14 +775,14 @@
                                 <!-- Keyword Exclusion -->
                                 <div>
                                     <h3 class="text-xl font-medium text-gray-100 mb-3">Keyword Exclusion (Details)</h3>
-                                    <p class="text-sm text-gray-400 mb-4">Exclude rows where the 'Details' field contains these words/frases. Separate with commas.</p>
+                                    <p class="text-sm text-gray-400 mb-4">Exclude rows where the 'Details' field contains these words/frases (e.g., Slack, Google Meet, Lunch). Separate with commas.</p>
                                     
                                     <div class="flex space-x-3 mt-1">
-                                        <input type="text" id="excludeKeywords" 
-                                               placeholder="E.g.: Slack, Google Meet, Lunch"
-                                               value="${state.tempExcludeKeywords}"
-                                               oninput="handleTempKeywordChange(event)"
-                                               class="block w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
+                                        <input type="text" id="tempExcludeKeywords" 
+                                                placeholder="E.g.: Break, Personal, Spotify"
+                                                value="${state.tempExcludeKeywords}"
+                                                oninput="handleTempKeywordChange(event)"
+                                                class="block w-full rounded-lg shadow-sm p-3 bg-[rgb(25,35,49)] border border-slate-700 text-white">
                                         <button onclick="handleApplyKeywordFilter()"
                                                 class="px-6 py-3 bg-primary-color text-slate-900 font-bold rounded-lg shadow-lg hover:bg-emerald-600 transition duration-150 whitespace-nowrap">
                                             Apply Filter
@@ -779,14 +794,14 @@
                             <!-- Summary (MOVED TO RIGHT) -->
                             <div class="lg:col-span-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-6">
                                 <div class="bento-card p-6 bg-primary-color text-slate-900 shadow-xl">
-                                    <h3 class="text-lg font-semibold mb-1 opacity-90 tracking-wide">TOTAL DURATION (FILTERED)</h3>
+                                    <h3 class="text-lg font-semibold mb-1 opacity-90 tracking-wide">TOTAL DURATION (OVERTIME)</h3>
                                     <p class="text-5xl font-extrabold tracking-tight">${formatDuration(state.summary.totalMinutes)}</p>
                                     <p class="text-sm opacity-80 mt-1">${state.summary.totalMinutes.toFixed(0)} minutes total</p>
                                 </div>
                                 <div class="bento-card p-6 border border-slate-700">
-                                    <h3 class="text-lg font-semibold mb-1 text-primary-color tracking-wide">LOG ENTRIES</h3>
+                                    <h3 class="text-lg font-semibold mb-1 text-secondary tracking-wide">LOG ENTRIES ANALYZED</h3>
                                     <p class="text-5xl font-extrabold text-secondary tracking-tight">${state.summary.logCount}</p>
-                                    <p class="text-sm text-gray-400 mt-1">Filtered Rows / Total: ${state.rawData.length}</p>
+                                    <p class="text-sm text-gray-400 mt-1">Total Rows: ${state.rawData.length} | Unique Activities: ${state.summary.uniqueLogs}</p>
                                 </div>
                             </div>
                         </div>
@@ -794,24 +809,24 @@
                         <!-- 4. LLM Insights -->
                         <div class="bento-card p-6 mb-8">
                             <h2 class="text-2xl font-semibold mb-4 text-gray-200 border-b border-slate-700/50 pb-3">4. LLM Insights ✨</h2>
-                            <p class="text-sm text-gray-400 mb-4">Use Gemini to analyze the filtered data above and generate summaries or reports.</p>
+                            <p class="text-sm text-gray-400 mb-4">Use Gemini to analyze the filtered data above and generate structured summaries or justification reports.</p>
 
                             ${isApiKeyMissing ? `
                                 <div class="p-4 bg-yellow-900/50 border border-yellow-700 text-yellow-300 rounded-xl mb-4">
                                     <p class="font-bold">API Key Required</p>
-                                    <p>Gemini features are currently disabled (Error 401) because the API key is missing. Please ensure your environment provides a valid key.</p>
+                                    <p>Gemini features are currently disabled. Please ensure the Gemini API key is provided in the environment.</p>
                                 </div>
                             ` : ''}
 
                             <div class="space-y-4">
                                 <div class="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
                                     <button onclick="handleSummarizeActivities()"
-                                            class="flex-1 px-4 py-3 bg-indigo-500 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-600 transition duration-150 disabled:opacity-50"
+                                            class="flex-1 px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-700 transition duration-150 disabled:opacity-50"
                                             ${!isReadyToAnalyze || state.aiLoading || isApiKeyMissing ? 'disabled' : ''}>
                                         ✨ Summarize Activities & Categorize
                                     </button>
                                     <button onclick="handleDraftReport()"
-                                            class="flex-1 px-4 py-3 bg-indigo-500 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-600 transition duration-150 disabled:opacity-50"
+                                            class="flex-1 px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-700 transition duration-150 disabled:opacity-50"
                                             ${!isReadyToAnalyze || state.aiLoading || isApiKeyMissing ? 'disabled' : ''}>
                                         ✨ Draft Justification Report
                                     </button>
@@ -827,7 +842,6 @@
                                         <div class="p-4 bg-red-900/50 border border-red-700 text-red-300 rounded-xl">
                                             <p class="font-bold">AI Error</p>
                                             <p>${state.aiError}</p>
-                                            ${state.aiError.includes('401') ? `<p class="text-sm mt-2">The 401 status indicates an **Authentication Failure**. Please ensure the Gemini API key is correct and authorized for use.</p>` : ''}
                                         </div>
                                     ` : (state.aiSummary || state.aiReport) ? `
                                         ${state.aiSummary ? `
@@ -859,11 +873,11 @@
                         <!-- 3. Filtered Results Table -->
                         <div class="bento-card p-6 mb-8">
                             <div class="flex justify-between items-center mb-6 border-b border-slate-700/50 pb-3">
-                                <h2 class="text-2xl font-semibold text-gray-200">3. Filtered Results</h2>
+                                <h2 class="text-2xl font-semibold text-gray-200">3. Filtered Results (${state.summary.logCount} logs)</h2>
                                 <button onclick="exportCSV()"
                                         class="px-6 py-3 border border-[rgb(96,165,250)] bg-transparent text-gray-100 font-bold rounded-lg shadow-md hover:bg-[rgb(96,165,250)] hover:text-slate-900 transition duration-150 disabled:opacity-50"
                                         ${state.filteredData.length === 0 ? 'disabled' : ''}>
-                                    Export CSV
+                                    Export CSV (Filtered)
                                 </button>
                             </div>
                             
@@ -881,7 +895,7 @@
                                     <tbody class="divide-y divide-slate-700 text-sm bg-slate-800">
                                         ${state.filteredData.length > 0 ? state.filteredData.map(entry => `
                                             <tr class="${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'bg-green-900/10' : 'hover:bg-slate-700/50'} transition duration-100">
-                                                <td class="px-4 py-3 whitespace-nowrap font-medium text-primary-color">${formatDayName(entry.from)}</td> <!-- NEW DAY CELL -->
+                                                <td class="px-4 py-3 whitespace-nowrap font-medium ${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'text-emerald-400' : 'text-primary-color'}">${formatDayName(entry.from)}</td> <!-- NEW DAY CELL -->
                                                 <td class="px-4 py-3 whitespace-nowrap font-medium text-gray-200">${formatDateTime(entry.from)}</td>
                                                 <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-400 font-mono">${entry.rawFrom}</td>
                                                 <td class="px-4 py-3 text-gray-300 log-table-details">${entry.title}</td>
@@ -901,27 +915,29 @@
                     ` : isMappingVisible ? `
                         <!-- Mapping is visible but incomplete -->
                         <div class="bento-card p-8 mb-8 text-center text-gray-400">
-                             <p class="text-xl font-medium">Complete the column mapping above to see analysis results.</p>
+                             <p class="text-xl font-medium">Please complete the column mapping above (Step 1.b) to enable filtering and analysis.</p>
                         </div>
                     ` : `
                         <!-- Placeholder when no data is loaded -->
                          <div class="bento-card p-8 mb-8 text-center text-gray-400">
-                             <p class="text-xl font-medium">Upload a file to start the analysis.</p>
+                             <p class="text-xl font-medium">Upload a time log file (.csv or .xlsx) to start the analysis.</p>
                         </div>
                     `}
                 </div>
             `;
 
-            // Re-attach event listeners
+            // Re-attach event listeners on every render
             document.getElementById('fileInput')?.addEventListener('change', handleFileUpload);
             document.getElementById('map-date')?.addEventListener('change', handleColumnMapChange);
             document.getElementById('map-time')?.addEventListener('change', handleColumnMapChange);
             document.getElementById('map-details')?.addEventListener('change', handleColumnMapChange);
             document.getElementById('map-duration')?.addEventListener('change', handleColumnMapChange);
             
+            // Filter controls listeners
             document.getElementById('excludeStart')?.addEventListener('change', handleFilterChange);
             document.getElementById('excludeEnd')?.addEventListener('change', handleFilterChange);
             document.getElementById('includeWeekends')?.addEventListener('change', handleFilterChange);
+            document.getElementById('tempExcludeKeywords')?.addEventListener('input', handleTempKeywordChange);
         }
 
         // Initialize the application when the window loads
@@ -931,24 +947,28 @@
 
         // Polyfill/Shim for older browser alert replacement (important for compatibility)
         function alert(message) {
-            const container = document.getElementById('app-root');
+            const container = document.body; // Use body for fixed positioning
             let modal = document.getElementById('customAlert');
 
             if (!modal) {
                 modal = document.createElement('div');
                 modal.id = 'customAlert';
-                modal.className = 'fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 transition-opacity duration-300';
+                modal.className = 'fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 transition-opacity duration-300 opacity-0';
                 modal.innerHTML = `
-                    <div class="bg-slate-800 rounded-xl shadow-2xl p-6 max-w-sm w-full transform transition-all duration-300 scale-95 opacity-0 border border-slate-700">
+                    <div class="bg-slate-800 rounded-xl shadow-2xl p-6 max-w-sm w-full transform transition-all duration-300 scale-95 border border-slate-700">
                         <h3 class="text-xl font-bold mb-3 text-primary-color">Success</h3>
                         <p id="alertMessage" class="mb-4 text-gray-300"></p>
-                        <button onclick="document.getElementById('customAlert').classList.add('opacity-0', 'scale-95'); setTimeout(() => document.getElementById('customAlert').style.display = 'none', 300);"
+                        <button id="alertCloseButton"
                                 class="w-full px-4 py-2 bg-primary-color text-slate-900 font-bold rounded-lg hover:bg-emerald-600 transition duration-150">
                             OK
                         </button>
                     </div>
                 `;
                 container.appendChild(modal);
+                document.getElementById('alertCloseButton').onclick = () => {
+                    modal.classList.add('opacity-0', 'scale-95');
+                    setTimeout(() => modal.style.display = 'none', 300);
+                };
             }
 
             document.getElementById('alertMessage').textContent = message;
