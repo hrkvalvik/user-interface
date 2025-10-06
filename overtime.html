@@ -370,8 +370,8 @@
                 const detailsRaw = row[detailsKey];
                 const durationRaw = row[durationKey];
 
-                // Skip if any mandatory raw fields are null/empty
-                if (!dateRaw || !timeRaw || !detailsRaw || !durationRaw) {
+                // Skip if any mandatory raw fields are null/empty. CRITICAL: detailsRaw and durationRaw must be present.
+                if (!dateRaw || !timeRaw || detailsRaw === undefined || detailsRaw === null || durationRaw === undefined || durationRaw === null) {
                     continue; 
                 }
 
@@ -928,7 +928,8 @@
                                 <table class="min-w-full divide-y divide-slate-700">
                                     <thead class="bg-slate-700 sticky top-0 shadow-lg">
                                         <tr>
-                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/12">Day</th> <!-- NEW DAY HEADER -->
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/12">No.</th> <!-- NEW ROW NUMBER HEADER -->
+                                            <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/12">Day</th>
                                             <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/6">From (Formatted)</th>
                                             <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/6">Raw From</th>
                                             <th class="px-4 py-4 text-left text-xs font-semibold text-gray-300 uppercase tracking-wider w-1/2">Title / Details (Raw Data)</th>
@@ -936,9 +937,10 @@
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-slate-700 text-sm bg-slate-800">
-                                        ${state.filteredData.length > 0 ? state.filteredData.map(entry => `
+                                        ${state.filteredData.length > 0 ? state.filteredData.map((entry, i) => `
                                             <tr class="${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'bg-green-900/10' : 'hover:bg-slate-700/50'} transition duration-100">
-                                                <td class="px-4 py-3 whitespace-nowrap font-medium ${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'text-emerald-400' : 'text-primary-color'}">${formatDayName(entry.from)}</td> <!-- NEW DAY CELL -->
+                                                <td class="px-4 py-3 whitespace-nowrap font-bold text-gray-400">${i + 1}</td> <!-- ROW NUMBER CELL -->
+                                                <td class="px-4 py-3 whitespace-nowrap font-medium ${dayjs(entry.from).day() === 0 || dayjs(entry.from).day() === 6 ? 'text-emerald-400' : 'text-primary-color'}">${formatDayName(entry.from)}</td> 
                                                 <td class="px-4 py-3 whitespace-nowrap font-medium text-gray-200">${formatDateTime(entry.from)}</td>
                                                 <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-400 font-mono">${entry.rawFrom}</td>
                                                 <td class="px-4 py-3 text-gray-300 log-table-details">${entry.title}</td>
@@ -946,7 +948,7 @@
                                             </tr>
                                         `).join('') : `
                                             <tr>
-                                                <td colspan="5" class="px-6 py-4 text-center text-gray-500 italic">
+                                                <td colspan="6" class="px-6 py-4 text-center text-gray-500 italic">
                                                     No log entries match the current filter settings.
                                                 </td>
                                             </tr>
