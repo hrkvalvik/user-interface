@@ -1,0 +1,151 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <div class="parallax">
+        <div class="content" id="parallax-content">
+            <h1>MY PARALLAX</h1>
+            <p>Some cool text about the lax</p>
+        </div>
+        <img src="the-dogs.jpg" id="parallax-img" alt="">
+    </div>
+
+
+    
+    <section x>
+        Lorem ipsum dolor sit amet consectetur adipisicing elit. Quae inventore, iure fugit vel facere perspiciatis nesciunt molestiae maiores nobis quam, aliquid minima ipsa consectetur architecto. Cum minus sequi eligendi dolorum!
+    </section>
+    <section>
+        Lorem ipsum dolor sit amet consectetur adipisicing elit. Quae inventore, iure fugit vel facere perspiciatis nesciunt molestiae maiores nobis quam, aliquid minima ipsa consectetur architecto. Cum minus sequi eligendi dolorum!
+    </section>
+    <section>
+        Lorem ipsum dolor sit amet consectetur adipisicing elit. Quae inventore, iure fugit vel facere perspiciatis nesciunt molestiae maiores nobis quam, aliquid minima ipsa consectetur architecto. Cum minus sequi eligendi dolorum!
+    </section>
+    <section>
+        Lorem ipsum dolor sit amet consectetur adipisicing elit. Quae inventore, iure fugit vel facere perspiciatis nesciunt molestiae maiores nobis quam, aliquid minima ipsa consectetur architecto. Cum minus sequi eligendi dolorum!
+    </section>
+    <section>
+        Lorem ipsum dolor sit amet consectetur adipisicing elit. Quae inventore, iure fugit vel facere perspiciatis nesciunt molestiae maiores nobis quam, aliquid minima ipsa consectetur architecto. Cum minus sequi eligendi dolorum!
+    </section>
+</body>
+</html>
+
+<style>
+
+    body {
+        background: #1b1b1b;
+    }
+    :root {
+        --h: 800px;
+    }
+
+    .o-parallax {
+        background-image:url(./the-dogs.jpg);
+        background-attachment: fixed;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: cover;
+        height: var(--h);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        color: var(--active-link-background-color);
+        isolation: isolate;
+        z-index: 0;
+        background-color: var(--body-color, #fff);
+    }
+
+    .parallax {
+        position: relative;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: var(--h);
+        z-index: -1;
+        overflow: hidden;
+        isolation: isolate;
+    }
+
+    .content {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 8px 28px;
+        border-radius: 6px;
+        flex-direction: column;
+        z-index: 3;
+        color: white;
+    }
+
+    h1 {
+        font-size: 3rem;
+        font-family: Verdana, Geneva, Tahoma, sans-serif;
+        font-weight: bold;
+        text-shadow: 0px 0px 23px #6a6767;
+
+    }
+
+    section {
+        padding: 1rem;
+        margin-block: 2rem;
+        background: rgba(245, 245, 245, .03);
+        border-radius: 5px;
+        color: white;
+        border-width: 1px;
+        border-style: solid;
+        border-top-color: rgba(255, 255, 255, .05) ;
+        border-left-color: rgba(255, 255, 255, .05) ;
+        border-right-color: rgba(0, 0, 0, .51) ;
+        border-bottom-color: rgba(0, 0, 0, .51) ;
+        transition: background 350ms ease-in ;
+
+        &:hover {
+            background: rgba(0, 0, 0, .2);
+            cursor: pointer;
+        }
+    }
+
+    section:nth-child(odd) {
+        width: 50%;
+        font-size: 28px;
+        padding: 1.4rem;
+        line-height: calc(28px * 1.2);
+    }
+
+
+
+    .parallax img {
+        position: absolute;
+        height: 105vh;
+        width: 100%;
+        object-fit: cover;
+        z-index: 1;
+    }
+
+    .parallax::before {
+        content: "";
+        background: rgba(10, 10, 10, 0);
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: 2;
+    }
+</style>
+
+<script>
+    let bg = document.getElementById('parallax-img');
+    let content = document.getElementById('parallax-content');
+
+    window.addEventListener('scroll', () => {
+        let value = window.scrollY; 
+        const scale = 1 + Math.min(value * 0.0001, 0.0675); // e.g. caps at 1.25
+        bg.style.marginTop = value * 2 + 'px';
+        content.style.marginTop = value * 0 + 'px';
+    })
+</script>
